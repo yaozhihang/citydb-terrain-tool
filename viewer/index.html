@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Terrain Viewer</title>
+    <script src="https://cdn.jsdelivr.net/npm/cesium@1.139.0/Build/Cesium/Cesium.js"></script>
+    <link href="https://cdn.jsdelivr.net/npm/cesium@1.139.0/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
+    <style>
+        html, body, #cesiumContainer {
+            width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden;
+        }
+    </style>
+</head>
+<body>
+<div id="cesiumContainer"></div>
+<script>
+    // ============================================================
+    //  CONFIGURATION - Edit these values for your terrain data
+    // ============================================================
+
+    // Path to your quantized-mesh terrain tiles (local or remote URL)
+    const TERRAIN_URL = "./terrain";
+
+    // Optional: fly to this location on start [longitude, latitude, height]
+    const INITIAL_CAMERA = {
+        longitude: 11.3255,  // Walchensee
+        latitude: 47.5970,
+        height: 8000,
+    };
+
+    // ============================================================
+
+    const viewer = new Cesium.Viewer("cesiumContainer", {
+        baseLayerPicker: true,
+        geocoder: false,
+        timeline: false,
+        animation: false,
+        baseLayer: Cesium.ImageryLayer.fromProviderAsync(
+            Cesium.IonImageryProvider.fromAssetId(3)  // Bing Aerial with Labels
+        ),
+    });
+
+    // Load terrain
+    (async () => {
+        try {
+            const terrainProvider = await Cesium.CesiumTerrainProvider.fromUrl(TERRAIN_URL);
+            viewer.scene.terrainProvider = terrainProvider;
+            console.log("Terrain loaded from:", TERRAIN_URL);
+        } catch (e) {
+            console.warn("Could not load terrain from", TERRAIN_URL, e);
+        }
+    })();
+
+    // Fly to initial position
+    viewer.camera.flyTo({
+        destination: Cesium.Cartesian3.fromDegrees(
+            INITIAL_CAMERA.longitude,
+            INITIAL_CAMERA.latitude,
+            INITIAL_CAMERA.height
+        ),
+    });
+
+    // Enable Cesium Inspector widget
+    viewer.extend(Cesium.viewerCesiumInspectorMixin);
+</script>
+</body>
+</html>
