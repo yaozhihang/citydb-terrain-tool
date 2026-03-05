@@ -36,12 +36,12 @@ public class RtinMesh implements MeshStrategy {
     }
 
     @Override
-    public MeshResult generateMesh(int gridSize, double[] terrain, float maxError) {
+    public MeshResult generateMesh(int gridSize, double[] terrain, float maxError, int maxTriangleSpan) {
         // Create a dedicated instance to ensure thread safety
         // (this object may be shared across threads)
         RtinMesh instance = new RtinMesh(gridSize, terrain);
         instance.computeErrors();
-        return instance.extractMesh(maxError);
+        return instance.extractMesh(maxError, maxTriangleSpan);
     }
 
     /**
@@ -110,7 +110,7 @@ public class RtinMesh implements MeshStrategy {
      * Extract an adaptive mesh by top-down traversal of the two root triangles.
      * Splits a triangle if its error exceeds maxError or if its midpoint is on a tile edge.
      */
-    public MeshResult extractMesh(float maxError) {
+    public MeshResult extractMesh(float maxError, int maxTriangleSpan) {
         Map<Long, Integer> vertexMap = new LinkedHashMap<>();
         List<int[]> triangles = new ArrayList<>();
 
@@ -125,14 +125,14 @@ public class RtinMesh implements MeshStrategy {
                 0, gridSize - 1,
                 gridSize - 1, 0,
                 0, 0,
-                maxError, vertexMap, triangles);
+                maxError, maxTriangleSpan, vertexMap, triangles);
 
         // Root triangle 1: top-right
         extractTriangle(
                 gridSize - 1, 0,
                 0, gridSize - 1,
                 gridSize - 1, gridSize - 1,
-                maxError, vertexMap, triangles);
+                maxError, maxTriangleSpan, vertexMap, triangles);
 
         // Build sorted vertex list (scanline order: y ascending, then x ascending)
         List<Map.Entry<Long, Integer>> entries = new ArrayList<>(vertexMap.entrySet());
@@ -223,7 +223,7 @@ public class RtinMesh implements MeshStrategy {
     }
 
     private void extractTriangle(int ax, int ay, int bx, int by, int cx, int cy,
-                                  float maxError,
+                                  float maxError, int maxTriangleSpan,
                                   Map<Long, Integer> vertexMap, List<int[]> triangles) {
         int mx = (ax + bx) >> 1;
         int my = (ay + by) >> 1;
@@ -249,8 +249,7 @@ public class RtinMesh implements MeshStrategy {
 
             // Force-split large triangles to ensure minimum mesh density
             // (needed so flat terrain still follows globe curvature)
-            int maxSpan = (gridSize - 1) / 8;
-            if (Math.abs(ax - bx) > maxSpan || Math.abs(ay - by) > maxSpan) {
+            if (Math.abs(ax - bx) > maxTriangleSpan || Math.abs(ay - by) > maxTriangleSpan) {
                 shouldSplit = true;
             }
 
@@ -258,9 +257,9 @@ public class RtinMesh implements MeshStrategy {
                 addVertex(vertexMap, mx, my);
 
                 // Left child: hypotenuse (cx,cy)-(ax,ay), apex (mx,my)
-                extractTriangle(cx, cy, ax, ay, mx, my, maxError, vertexMap, triangles);
+                extractTriangle(cx, cy, ax, ay, mx, my, maxError, maxTriangleSpan, vertexMap, triangles);
                 // Right child: hypotenuse (bx,by)-(cx,cy), apex (mx,my)
-                extractTriangle(bx, by, cx, cy, mx, my, maxError, vertexMap, triangles);
+                extractTriangle(bx, by, cx, cy, mx, my, maxError, maxTriangleSpan, vertexMap, triangles);
                 return;
             }
         }

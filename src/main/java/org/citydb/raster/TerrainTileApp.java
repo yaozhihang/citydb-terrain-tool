@@ -66,6 +66,13 @@ public class TerrainTileApp {
             float maxError = baseError * (1 << (zoomLevel - t)); // baseError * 2^(maxZoom - currentZoom)
             if (t == zoomLevel) maxError = baseError;
 
+            // At low zoom, tiles cover huge areas — force dense triangulation
+            // so flat mesh follows earth curvature. Only affects few tiles.
+            int maxTriangleSpan;
+            if (t <= 2) maxTriangleSpan = 1;       // zoom 0-2: every grid cell splits
+            else if (t <= 4) maxTriangleSpan = 2;   // zoom 3-4: max 2-cell span
+            else maxTriangleSpan = (currentGridSize - 1) / 8; // zoom 5+: original behavior
+
             availableTiles[t] = new int[]{tileMinBound[0], tileMinBound[1], tileMaxBound[0], tileMaxBound[1]};
             boolean doStart = (tileMaxBound[0] - tileMinBound[0]) > 1 || (tileMaxBound[1] - tileMinBound[1]) > 1;
 
@@ -75,9 +82,10 @@ public class TerrainTileApp {
 
                     int finalGridSize = currentGridSize;
                     float finalMaxError = maxError;
+                    int finalMaxTriangleSpan = maxTriangleSpan;
                     executor.submit(() -> {
                         try {
-                            GeoTiffToQuantizedMesh.createTMSTile(provider, meshStrategy, outputFolder, finalT, finalI, finalJ, finalGridSize, finalMaxError, cacheMap, doStart);
+                            GeoTiffToQuantizedMesh.createTMSTile(provider, meshStrategy, outputFolder, finalT, finalI, finalJ, finalGridSize, finalMaxError, finalMaxTriangleSpan, cacheMap, doStart);
                             System.out.println("Remaining tiles: " + counter.getAndDecrement());
                         } catch (Exception e) {
                             e.printStackTrace();

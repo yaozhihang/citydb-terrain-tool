@@ -8,8 +8,8 @@ public class GeoTiffToQuantizedMesh {
 
     public static void createTMSTile(ElevationProvider provider, MeshStrategy meshStrategy,
                                       String outputFolder, int zoom, int tileX, int tileY,
-                                      int gridSize, float maxError, Map<String, double[]> cacheMap,
-                                      boolean doStart) throws Exception {
+                                      int gridSize, float maxError, int maxTriangleSpan,
+                                      Map<String, double[]> cacheMap, boolean doStart) throws Exception {
         double[] bounds = CoordinateUtils.calculateTileBounds(tileX, tileY, zoom);
         double minX = bounds[0], maxX = bounds[1], minY = bounds[2], maxY = bounds[3];
 
@@ -82,7 +82,7 @@ public class GeoTiffToQuantizedMesh {
                 terrain[y * gridSize + x] = elevationData[x][y];
             }
         }
-        MeshResult mesh = meshStrategy.generateMesh(gridSize, terrain, maxError);
+        MeshResult mesh = meshStrategy.generateMesh(gridSize, terrain, maxError, maxTriangleSpan);
 
         // Write output
         String filePath = outputFolder + zoom + File.separator + tileX + File.separator + tileY + ".terrain";
