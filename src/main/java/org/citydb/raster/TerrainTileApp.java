@@ -34,6 +34,12 @@ public class TerrainTileApp {
         float baseError = 5.0f; // meters
 
         String outputFolder = "viewer/terrain/";
+        double[] dataExtent = {minX, maxX, minY, maxY};
+
+        // Skip DB until the extent spans at least this many tiles (detail becomes visible)
+        int minTilesVisible = 8;
+        double extentSpan = Math.min(maxX - minX, maxY - minY);
+        int skipDbZoom = (int) (Math.log(minTilesVisible * 180.0 / extentSpan) / Math.log(2));
         MeshStrategy meshStrategy = new RtinMesh();
         ElevationProvider provider = new ElevationProvider();
         Map<String, double[]> cacheMap = new ConcurrentHashMap<>();
@@ -74,7 +80,6 @@ public class TerrainTileApp {
             else maxTriangleSpan = (currentGridSize - 1) / 8; // zoom 5+: original behavior
 
             availableTiles[t] = new int[]{tileMinBound[0], tileMinBound[1], tileMaxBound[0], tileMaxBound[1]};
-            boolean doStart = (tileMaxBound[0] - tileMinBound[0]) > 1 || (tileMaxBound[1] - tileMinBound[1]) > 1;
 
             for (int i = tileMinBound[0]; i <= tileMaxBound[0]; i++) {
                 for (int j = tileMinBound[1]; j <= tileMaxBound[1]; j++) {
@@ -85,7 +90,7 @@ public class TerrainTileApp {
                     int finalMaxTriangleSpan = maxTriangleSpan;
                     executor.submit(() -> {
                         try {
-                            GeoTiffToQuantizedMesh.createTMSTile(provider, meshStrategy, outputFolder, finalT, finalI, finalJ, finalGridSize, finalMaxError, finalMaxTriangleSpan, cacheMap, doStart);
+                            GeoTiffToQuantizedMesh.createTMSTile(provider, meshStrategy, outputFolder, finalT, finalI, finalJ, finalGridSize, finalMaxError, finalMaxTriangleSpan, cacheMap, dataExtent, skipDbZoom);
                             System.out.println("Remaining tiles: " + counter.getAndDecrement());
                         } catch (Exception e) {
                             e.printStackTrace();

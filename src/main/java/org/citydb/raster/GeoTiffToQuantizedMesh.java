@@ -9,12 +9,18 @@ public class GeoTiffToQuantizedMesh {
     public static void createTMSTile(ElevationProvider provider, MeshStrategy meshStrategy,
                                       String outputFolder, int zoom, int tileX, int tileY,
                                       int gridSize, float maxError, int maxTriangleSpan,
-                                      Map<String, double[]> cacheMap, boolean doStart) throws Exception {
+                                      Map<String, double[]> cacheMap, double[] dataExtent,
+                                      int skipDbZoom) throws Exception {
         double[] bounds = CoordinateUtils.calculateTileBounds(tileX, tileY, zoom);
         double minX = bounds[0], maxX = bounds[1], minY = bounds[2], maxY = bounds[3];
 
+        // Skip DB query if: zoom <= skipDbZoom, or tile doesn't overlap data extent
+        boolean queryDb = zoom > skipDbZoom
+                && minX < dataExtent[1] && maxX > dataExtent[0]
+                && minY < dataExtent[3] && maxY > dataExtent[2];
+
         // Fetch elevation grid (includes raster sampling, smoothing, edge caching)
-        double[][] elevationData = provider.fetchElevationGrid(bounds, gridSize, zoom, tileX, tileY, cacheMap, doStart);
+        double[][] elevationData = provider.fetchElevationGrid(bounds, gridSize, zoom, tileX, tileY, cacheMap, queryDb);
 
         // Compute height range
         double minHeight = Double.MAX_VALUE, maxHeight = Double.MIN_VALUE;
