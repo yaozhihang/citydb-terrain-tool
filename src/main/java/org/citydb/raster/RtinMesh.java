@@ -52,19 +52,29 @@ public class RtinMesh implements MeshStrategy {
     public void computeErrors() {
         Arrays.fill(errors, 0);
 
-        // Root triangle 0: bottom-left half
-        // Hypotenuse: (0, gridSize-1) to (gridSize-1, 0), apex: (0, 0)
-        computeErrorsRecursive(
-                0, gridSize - 1,
-                gridSize - 1, 0,
-                0, 0);
+        // Iterate until the error array converges. The recursive bottom-up
+        // computation processes left subtrees before right subtrees at every
+        // level, so diamond pairs that cross subtree boundaries miss each
+        // other's contributions. Each pass propagates one more level of
+        // cross-subtree errors via Math.max (which only increases values),
+        // guaranteeing convergence. Typically 2-4 passes suffice.
+        for (int pass = 0; pass < 20; pass++) {
+            double[] prev = Arrays.copyOf(errors, errors.length);
 
-        // Root triangle 1: top-right half
-        // Hypotenuse: (gridSize-1, 0) to (0, gridSize-1), apex: (gridSize-1, gridSize-1)
-        computeErrorsRecursive(
-                gridSize - 1, 0,
-                0, gridSize - 1,
-                gridSize - 1, gridSize - 1);
+            // Root triangle 0: bottom-left half
+            computeErrorsRecursive(
+                    0, gridSize - 1,
+                    gridSize - 1, 0,
+                    0, 0);
+
+            // Root triangle 1: top-right half
+            computeErrorsRecursive(
+                    gridSize - 1, 0,
+                    0, gridSize - 1,
+                    gridSize - 1, gridSize - 1);
+
+            if (Arrays.equals(errors, prev)) break;
+        }
     }
 
     private void computeErrorsRecursive(int ax, int ay, int bx, int by, int cx, int cy) {
@@ -86,6 +96,14 @@ public class RtinMesh implements MeshStrategy {
         double interpolated = (terrain[ay * gridSize + ax] + terrain[by * gridSize + bx]) / 2.0;
         double actual = terrain[my * gridSize + mx];
         double error = Math.abs(actual - interpolated);
+
+        // Force-split at tile-edge midpoints by setting error to max.
+        // This ensures all edge grid points become mesh vertices (for seamless tile
+        // stitching) AND propagates upward so diamond-pair consistency is maintained,
+        // preventing T-junction gaps.
+        if (mx == 0 || mx == gridSize - 1 || my == 0 || my == gridSize - 1) {
+            error = Double.MAX_VALUE;
+        }
 
         // Propagate children's max errors upward
         // Left child midpoint
@@ -134,7 +152,14 @@ public class RtinMesh implements MeshStrategy {
                 gridSize - 1, gridSize - 1,
                 maxError, maxTriangleSpan, vertexMap, triangles);
 
-        // Build sorted vertex list (scanline order: y ascending, then x ascending)
+        // Re-index vertices by first-appearance order in the triangle list.
+        // High-water-mark encoding requires that vertex N first appears in the
+        // flat index array exactly when the running "highest" counter equals N.
+        // By numbering vertices in the order they first appear, this is guaranteed.
+        int numVertices = vertexMap.size();
+        int numTriangles = triangles.size();
+
+        // Step 1: map insertion-order indices → scanline-order indices
         List<Map.Entry<Long, Integer>> entries = new ArrayList<>(vertexMap.entrySet());
         entries.sort((a, b) -> {
             int ay = (int) (a.getKey() >> 32);
@@ -144,77 +169,90 @@ public class RtinMesh implements MeshStrategy {
             if (ay != by2) return Integer.compare(ay, by2);
             return Integer.compare(axx, bxx);
         });
-
-        // Re-index vertices in scanline order
-        int[] reindex = new int[vertexMap.size()];
-        int[] gridIndices = new int[entries.size() * 2];
+        int[] toScanline = new int[numVertices];
         for (int i = 0; i < entries.size(); i++) {
-            long key = entries.get(i).getKey();
-            int oldIndex = entries.get(i).getValue();
-            reindex[oldIndex] = i;
-            gridIndices[i * 2] = (int) (key & 0xFFFFFFFFL);     // x
-            gridIndices[i * 2 + 1] = (int) (key >> 32);          // y
+            toScanline[entries.get(i).getValue()] = i;
         }
 
-        // Re-index triangles and sort by minimum vertex index
-        int[][] triSortable = new int[triangles.size()][3];
-        for (int i = 0; i < triangles.size(); i++) {
+        // Step 2: re-index triangles to scanline order & sort by min vertex
+        int[][] triScanline = new int[numTriangles][3];
+        for (int i = 0; i < numTriangles; i++) {
             int[] tri = triangles.get(i);
-            triSortable[i][0] = reindex[tri[0]];
-            triSortable[i][1] = reindex[tri[1]];
-            triSortable[i][2] = reindex[tri[2]];
+            triScanline[i][0] = toScanline[tri[0]];
+            triScanline[i][1] = toScanline[tri[1]];
+            triScanline[i][2] = toScanline[tri[2]];
         }
-
-        // Sort triangles by minimum vertex index for high-water-mark encoding
-        Arrays.sort(triSortable, (a, b) -> {
+        Arrays.sort(triScanline, (a, b) -> {
             int minA = Math.min(a[0], Math.min(a[1], a[2]));
             int minB = Math.min(b[0], Math.min(b[1], b[2]));
             return Integer.compare(minA, minB);
         });
 
-        int[] triArray = new int[triSortable.length * 3];
-        for (int i = 0; i < triSortable.length; i++) {
-            triArray[i * 3] = triSortable[i][0];
-            triArray[i * 3 + 1] = triSortable[i][1];
-            triArray[i * 3 + 2] = triSortable[i][2];
+        // Step 3: assign final vertex indices by first-appearance in sorted triangles
+        int[] scanlineToFinal = new int[numVertices];
+        Arrays.fill(scanlineToFinal, -1);
+        int nextIdx = 0;
+        for (int[] tri : triScanline) {
+            for (int v : tri) {
+                if (scanlineToFinal[v] == -1) {
+                    scanlineToFinal[v] = nextIdx++;
+                }
+            }
         }
 
-        // Collect edge vertices (already in scanline order from sorted entries)
+        // Step 4: build final triangle index array with first-appearance indices
+        int[] triArray = new int[numTriangles * 3];
+        for (int i = 0; i < numTriangles; i++) {
+            triArray[i * 3]     = scanlineToFinal[triScanline[i][0]];
+            triArray[i * 3 + 1] = scanlineToFinal[triScanline[i][1]];
+            triArray[i * 3 + 2] = scanlineToFinal[triScanline[i][2]];
+        }
+
+        // Step 5: build vertex grid-index array in final order
+        // finalToScanline[finalIdx] = scanlineIdx
+        int[] finalToScanline = new int[numVertices];
+        for (int s = 0; s < numVertices; s++) {
+            finalToScanline[scanlineToFinal[s]] = s;
+        }
+        int[] gridIndices = new int[numVertices * 2];
+        for (int f = 0; f < numVertices; f++) {
+            long key = entries.get(finalToScanline[f]).getKey();
+            gridIndices[f * 2]     = (int) (key & 0xFFFFFFFFL);  // x
+            gridIndices[f * 2 + 1] = (int) (key >> 32);           // y
+        }
+
+        // Step 6: collect edge vertices (sorted ascending by final index)
         List<Integer> westEdge = new ArrayList<>();
         List<Integer> eastEdge = new ArrayList<>();
         List<Integer> southEdge = new ArrayList<>();
         List<Integer> northEdge = new ArrayList<>();
 
-        for (int i = 0; i < entries.size(); i++) {
-            long key = entries.get(i).getKey();
-            int x = (int) (key & 0xFFFFFFFFL);
-            int y = (int) (key >> 32);
-
-            if (x == 0) westEdge.add(i);
-            if (x == gridSize - 1) eastEdge.add(i);
-            if (y == 0) southEdge.add(i);
-            if (y == gridSize - 1) northEdge.add(i);
+        for (int f = 0; f < numVertices; f++) {
+            int x = gridIndices[f * 2];
+            int y = gridIndices[f * 2 + 1];
+            if (x == 0) westEdge.add(f);
+            if (x == gridSize - 1) eastEdge.add(f);
+            if (y == 0) southEdge.add(f);
+            if (y == gridSize - 1) northEdge.add(f);
         }
+        // Cesium requires edge vertices in geographic order:
+        // west/east edges: south to north (ascending y)
+        // south/north edges: west to east (ascending x)
+        westEdge.sort(Comparator.comparingInt(f -> gridIndices[f * 2 + 1]));
+        eastEdge.sort(Comparator.comparingInt(f -> gridIndices[f * 2 + 1]));
+        southEdge.sort(Comparator.comparingInt(f -> gridIndices[f * 2]));
+        northEdge.sort(Comparator.comparingInt(f -> gridIndices[f * 2]));
 
         return new MeshResult(
-                entries.size(),
+                numVertices,
                 gridIndices,
-                triSortable.length,
+                numTriangles,
                 triArray,
                 westEdge.stream().mapToInt(Integer::intValue).toArray(),
                 southEdge.stream().mapToInt(Integer::intValue).toArray(),
                 eastEdge.stream().mapToInt(Integer::intValue).toArray(),
                 northEdge.stream().mapToInt(Integer::intValue).toArray()
         );
-    }
-
-    /** Check if at least two of the three values equal edgeVal. */
-    private boolean twoOnEdge(int a, int b, int c, int edgeVal) {
-        int count = 0;
-        if (a == edgeVal) count++;
-        if (b == edgeVal) count++;
-        if (c == edgeVal) count++;
-        return count >= 2;
     }
 
     private int addVertex(Map<Long, Integer> vertexMap, int x, int y) {
@@ -235,15 +273,9 @@ public class RtinMesh implements MeshStrategy {
             boolean shouldSplit = false;
 
             // Check error threshold at midpoint
+            // (edge midpoints have forced MAX_VALUE error from computeErrors,
+            //  ensuring all edge grid points become vertices for tile stitching)
             if (errors[my * gridSize + mx] > maxError) {
-                shouldSplit = true;
-            }
-
-            // Force-split if the triangle has a side along a tile edge.
-            // This ensures ALL edge grid points become mesh vertices, so adjacent
-            // tiles always share the exact same vertex positions on their common edge.
-            if (twoOnEdge(ax, bx, cx, 0) || twoOnEdge(ax, bx, cx, gridSize - 1) ||
-                twoOnEdge(ay, by, cy, 0) || twoOnEdge(ay, by, cy, gridSize - 1)) {
                 shouldSplit = true;
             }
 

@@ -86,17 +86,17 @@ public class ElevationProvider {
 
         double[][] elevationData = new double[gridSize][gridSize];
 
-        if (!doStart) {
-            return elevationData;
+        if (doStart) {
+            GridCoverage2D coverage = getGeoTiffFromDB(minX, minY, maxX, maxY, gridSize, gridSize);
+            if (coverage != null) {
+                sampleRasterToGrid(coverage, elevationData, gridSize, minX, minY, cellSizeX, cellSizeY);
+                elevationData = smoothGrid(elevationData);
+            }
         }
 
-        GridCoverage2D coverage = getGeoTiffFromDB(minX, minY, maxX, maxY, gridSize, gridSize);
-
-        if (coverage != null) {
-            sampleRasterToGrid(coverage, elevationData, gridSize, minX, minY, cellSizeX, cellSizeY);
-            elevationData = smoothGrid(elevationData);
-            applyEdgeCache(elevationData, gridSize, zoom, tileX, tileY, cacheMap);
-        }
+        // Always apply edge cache — even flat/empty tiles must participate
+        // so they can adopt neighbor edge values and vice versa
+        applyEdgeCache(elevationData, gridSize, zoom, tileX, tileY, cacheMap);
 
         return elevationData;
     }
@@ -212,6 +212,35 @@ public class ElevationProvider {
                 elevationData[x][gridSize - 1] = existingTop[x];
             }
         }
+
+        // Corner reconciliation: edges applied above may have left stale corner
+        // values in the cache. Use separate corner keys so all tiles meeting at
+        // a corner agree on the final elevation value.
+        int gs = gridSize - 1;
+
+        // Bottom-left corner (0,0)
+        String cBL = "c_" + zoom + "_" + tileX + "_" + tileY;
+        double[] blVal = {elevationData[0][0]};
+        double[] exBL = cacheMap.putIfAbsent(cBL, blVal);
+        if (exBL != null) elevationData[0][0] = exBL[0];
+
+        // Bottom-right corner (gs,0)
+        String cBR = "c_" + zoom + "_" + (tileX + 1) + "_" + tileY;
+        double[] brVal = {elevationData[gs][0]};
+        double[] exBR = cacheMap.putIfAbsent(cBR, brVal);
+        if (exBR != null) elevationData[gs][0] = exBR[0];
+
+        // Top-left corner (0,gs)
+        String cTL = "c_" + zoom + "_" + tileX + "_" + (tileY + 1);
+        double[] tlVal = {elevationData[0][gs]};
+        double[] exTL = cacheMap.putIfAbsent(cTL, tlVal);
+        if (exTL != null) elevationData[0][gs] = exTL[0];
+
+        // Top-right corner (gs,gs)
+        String cTR = "c_" + zoom + "_" + (tileX + 1) + "_" + (tileY + 1);
+        double[] trVal = {elevationData[gs][gs]};
+        double[] exTR = cacheMap.putIfAbsent(cTR, trVal);
+        if (exTR != null) elevationData[gs][gs] = exTR[0];
     }
 
     private GridCoverage2D getGeoTiffFromDB(double minLon, double minLat, double maxLon, double maxLat,
