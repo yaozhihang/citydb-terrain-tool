@@ -210,8 +210,8 @@ public class PostGISElevationProvider implements ElevationProvider {
             ReferencedEnvelope bboxWGS84 = new ReferencedEnvelope(minLat, maxLat, minLon, maxLon, CRS_WGS84);
             ReferencedEnvelope bboxUTM32 = bboxWGS84.transform(CRS_UTM32, true);
 
-            double xBuffer = bboxUTM32.getWidth() / 2;
-            double yBuffer = bboxUTM32.getHeight() / 2;
+            double xBuffer = bboxUTM32.getWidth() * 0.1;
+            double yBuffer = bboxUTM32.getHeight() * 0.1;
 
             double xMin = bboxUTM32.getMinX() - xBuffer;
             double yMin = bboxUTM32.getMinY() - yBuffer;
@@ -225,8 +225,8 @@ public class PostGISElevationProvider implements ElevationProvider {
             ps.setDouble(2, yMin);
             ps.setDouble(3, xMax);
             ps.setDouble(4, yMax);
-            ps.setInt(5, columns * 2);
-            ps.setInt(6, rows * 2);
+            ps.setInt(5, columns);
+            ps.setInt(6, rows);
             ps.setDouble(7, xMin);
             ps.setDouble(8, yMax);
             ps.setDouble(9, xRes);
@@ -236,7 +236,7 @@ public class PostGISElevationProvider implements ElevationProvider {
             if (rs.next()) {
                 byte[] rasterData = rs.getBytes(1);
                 GeoTiffReader reader = new GeoTiffReader(new ByteArrayInputStream(rasterData));
-                return reader.read(null);
+                return reader.read();
             }
         } catch (Throwable e) {
             // silently skip tiles with no raster data
