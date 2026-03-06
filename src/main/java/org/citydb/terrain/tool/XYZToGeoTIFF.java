@@ -1,4 +1,4 @@
-package org.citydb.raster.tool;
+package org.citydb.terrain.tool;
 
 import org.geotools.api.referencing.crs.CoordinateReferenceSystem;
 import org.geotools.coverage.grid.GridCoverage2D;
@@ -123,7 +123,7 @@ public class XYZToGeoTIFF {
 
         GeoTiffWriter writer = new GeoTiffWriter(new File(outputFilePath));
         try {
-            writer.write(coverage, null);
+            writer.write(coverage);
         } finally {
             writer.dispose();
         }

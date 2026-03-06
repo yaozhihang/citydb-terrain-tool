@@ -1,12 +1,12 @@
-package org.citydb.raster.io;
+package org.citydb.terrain.io;
 
 import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONArray;
 import com.alibaba.fastjson2.JSONObject;
 import com.alibaba.fastjson2.JSONWriter;
-import org.citydb.raster.mesh.MeshStrategy;
-import org.citydb.raster.provider.ElevationProvider;
-import org.citydb.raster.util.CoordinateUtils;
+import org.citydb.terrain.mesh.MeshStrategy;
+import org.citydb.terrain.provider.ElevationProvider;
+import org.citydb.terrain.util.CoordinateUtils;
 
 import java.io.*;
 import java.time.Duration;

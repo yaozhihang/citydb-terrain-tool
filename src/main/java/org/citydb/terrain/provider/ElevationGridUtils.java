@@ -1,4 +1,4 @@
-package org.citydb.raster.provider;
+package org.citydb.terrain.provider;
 
 import org.apache.tomcat.jdbc.pool.DataSource;
 import org.apache.tomcat.jdbc.pool.PoolProperties;

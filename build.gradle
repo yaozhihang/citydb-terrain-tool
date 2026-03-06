@@ -43,7 +43,7 @@ dependencies {
 }
 
 application {
-    mainClass = 'org.citydb.raster.TerrainTileApp'
+    mainClass = 'org.citydb.terrain.Launcher'
 }
 
 test {

@@ -1,4 +1,4 @@
-package org.citydb.raster.util;
+package org.citydb.terrain.util;
 
 /**
  * Pure geodesy and coordinate utilities for TMS tile generation.

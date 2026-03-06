@@ -1,4 +1,4 @@
-package org.citydb.raster.util;
+package org.citydb.terrain.util;
 
 public class Cartesian3 {
     public double x;

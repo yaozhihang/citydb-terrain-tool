@@ -1,4 +1,4 @@
-package org.citydb.raster.util;
+package org.citydb.terrain.util;
 
 import java.util.List;
 

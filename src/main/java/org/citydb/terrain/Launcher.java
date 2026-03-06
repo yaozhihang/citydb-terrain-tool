@@ -1,11 +1,11 @@
-package org.citydb.raster;
+package org.citydb.terrain;
 
 import org.apache.commons.cli.*;
-import org.citydb.raster.io.TerrainGenerator;
-import org.citydb.raster.mesh.*;
-import org.citydb.raster.provider.ElevationProvider;
-import org.citydb.raster.provider.PointCloudElevationProvider;
-import org.citydb.raster.provider.PostGISElevationProvider;
+import org.citydb.terrain.io.TerrainGenerator;
+import org.citydb.terrain.mesh.*;
+import org.citydb.terrain.provider.ElevationProvider;
+import org.citydb.terrain.provider.PointCloudElevationProvider;
+import org.citydb.terrain.provider.PostGISElevationProvider;
 
 public class Launcher {
 

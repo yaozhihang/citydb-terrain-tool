@@ -1,6 +1,6 @@
-package org.citydb.raster.io;
+package org.citydb.terrain.io;
 
-import org.citydb.raster.mesh.MeshResult;
+import org.citydb.terrain.mesh.MeshResult;
 
 import java.io.*;
 

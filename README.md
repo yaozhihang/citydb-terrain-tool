@@ -1,32 +1,39 @@
-# CityDB Raster Tool
+# CityDB Terrain Tool
 
-Generates [Cesium quantized-mesh](https://github.com/CesiumGS/quantized-mesh) terrain tiles from PostGIS raster elevation data. Designed for serving 3D terrain in CesiumJS-based viewers.
+Generates [Cesium quantized-mesh](https://github.com/CesiumGS/quantized-mesh) terrain tiles from PostGIS elevation data (raster or point cloud). Designed for serving 3D terrain in CesiumJS-based viewers.
 
 ## Architecture
 
 ```
-org.citydb.raster
-└── TerrainTileApp              – CLI entry point, parses arguments
+org.citydb.terrain
+└── Launcher                    – CLI entry point, parses arguments
 
-org.citydb.raster.mesh
+org.citydb.terrain.mesh
 ├── MeshStrategy                – Interface for mesh generation algorithms
 ├── MeshResult                  – Mesh output (vertices, triangles, edges)
 ├── RtinMesh                    – RTIN adaptive mesh generator
 ├── DelaunayMesh                – Delaunay adaptive mesh generator
 └── SimpleGridMesh              – Regular-grid mesh (no simplification)
 
-org.citydb.raster.io
-├── TerrainTileGenerator        – Orchestrates multi-zoom tile generation
-├── GeoTiffToQuantizedMesh      – Per-tile pipeline (elevation → mesh → binary)
-├── QuantizedMeshWriter         – Encodes mesh into Cesium .terrain format
-├── ElevationProvider           – Fetches elevation from PostGIS
-├── RasterImporter              – Imports GeoTIFF files into PostGIS
-└── XYZToGeoTIFF                – Converts XYZ point files to GeoTIFF
+org.citydb.terrain.io
+├── TerrainGenerator            – Orchestrates multi-zoom tile generation
+├── TerrainTileCreator          – Per-tile pipeline (elevation → mesh → binary)
+└── TerrainTileWriter           – Encodes mesh into Cesium .terrain format
 
-org.citydb.raster.util
+org.citydb.terrain.provider
+├── ElevationProvider           – Interface for elevation data sources
+├── PostGISElevationProvider    – Fetches elevation from PostGIS raster data
+├── PointCloudElevationProvider – Fetches elevation from PostGIS point clouds
+└── ElevationGridUtils          – Shared grid utilities (edge cache, smoothing)
+
+org.citydb.terrain.util
 ├── CoordinateUtils             – WGS84/ECEF/TMS coordinate conversions
 ├── BoundingSphere              – Bounding sphere computation
 └── Cartesian3                  – 3D vector math, horizon culling
+
+org.citydb.terrain.tool
+├── RasterImporter              – Imports GeoTIFF files into PostGIS
+└── XYZToGeoTIFF                – Converts XYZ point files to GeoTIFF
 ```
 
 ## Mesh Strategies
@@ -45,7 +52,7 @@ Binary triangle tree approach similar to [mapbox/martini](https://github.com/map
 Bowyer-Watson incremental Delaunay triangulation with greedy vertex insertion.
 
 - **Any grid size** (no power-of-two constraint)
-- Starts with all edge vertices + regular interior seed grid
+- Seeds edges and interior at regular intervals, then inserts vertices by error
 - Greedily inserts the grid point with the highest interpolation error
 - Produces well-shaped triangles (maximizes minimum angle)
 
@@ -57,6 +64,16 @@ Uniform regular-grid triangulation. Every grid cell is split into two triangles 
 - All grid points become vertices — produces a dense, uniform mesh
 - `maxError` and `maxTriangleSpan` parameters are ignored
 - Useful when consistent mesh density is preferred over adaptive simplification
+
+## Elevation Providers
+
+### PostGISElevationProvider (raster)
+
+Fetches raster elevation data from PostGIS using `ST_Resample` and `ST_Union`. SRID is auto-detected from the database.
+
+### PointCloudElevationProvider (pointcloud)
+
+Queries 3D point geometries (`PointZ`) from PostGIS. Points are snapped to a grid and averaged using `ST_SnapToGrid` in SQL.
 
 ## Zoom Level & Grid Size Selection
 
@@ -81,29 +98,6 @@ where `grid_cells = gridSize - 1`.
 | 14   | 129      | 128        | ~9.5          | ~130k           | Slightly coarser than 5m |
 | 15   | 129      | 128        | ~4.8          | ~530k           | Matches 5m raster        |
 
-### Recommended configurations for 5m raster
-
-**Option A — Fewer tiles, denser grid (recommended):**
-
-```java
-int zoomLevel = 13;
-int currentGridSize = (t == zoomLevel) ? 513 : 33;  // 2^9+1 at max zoom
-```
-
-- ~33k tiles, ~4.8m cell size at max zoom
-- Fewer DB queries, less I/O overhead
-- Requires `gridSize = 2^n+1` for RTIN, or use DelaunayMesh for arbitrary sizes
-
-**Option B — More tiles, standard grid:**
-
-```java
-int zoomLevel = 15;
-int currentGridSize = (t == zoomLevel) ? 129 : 33;  // 2^7+1 at max zoom
-```
-
-- ~530k tiles, ~4.8m cell size at max zoom
-- Smaller individual tiles, higher total count
-
 ### Constraints
 
 - **RTIN** requires `gridSize = 2^n + 1`: valid values are 3, 5, 9, 17, 33, 65, 129, 257, 513, 1025...
@@ -115,19 +109,24 @@ int currentGridSize = (t == zoomLevel) ? 129 : 33;  // 2^7+1 at max zoom
 All parameters have sensible defaults and can be overridden via command-line options:
 
 ```
-Usage: TerrainTileApp [options]
+Usage: terrain-tile [options]
 
 Options:
-  --minX <lon>      West extent longitude             (default: 8.97205)
-  --maxX <lon>      East extent longitude             (default: 13.84636)
-  --minY <lat>      South extent latitude             (default: 47.26887)
-  --maxY <lat>      North extent latitude             (default: 50.56651)
-  --gridSize <n>    Grid size, must be 2^n+1 for RTIN (default: 33)
-  --zoom <n>        Max zoom level                    (default: 10)
-  --error <m>       Base error in meters              (default: 5.0)
-  --output <dir>    Output folder                     (default: viewer/terrain/)
-  --mesh <type>     Mesh strategy                     (default: delaunay)
-  -h, --help        Show help message
+  --minX <lon>       West extent longitude             (default: 8.97205)
+  --maxX <lon>       East extent longitude             (default: 13.84636)
+  --minY <lat>       South extent latitude             (default: 47.26887)
+  --maxY <lat>       North extent latitude             (default: 50.56651)
+  --gridSize <n>     Grid size, must be 2^n+1 for RTIN (default: 33)
+  -z, --zoom <n>     Max zoom level                    (default: 10)
+  -e, --error <m>    Base error in meters              (default: 5.0)
+  -o, --output <dir> Output folder                     (default: viewer/terrain/)
+  -m, --mesh <type>  Mesh strategy                     (default: delaunay)
+  -p, --provider     Elevation provider                (default: raster)
+  -d, --db <url>     JDBC database URL                 (default: jdbc:postgresql://localhost:5432/bayern_dem_raster)
+  -u, --user <name>  Database username                 (default: postgres)
+  --password <pw>    Database password                 (default: 125125)
+  -t, --table <name> Database table name               (default: raster_table / point_cloud)
+  -h, --help         Show help message
 ```
 
 Available mesh strategies for `--mesh`:
@@ -138,6 +137,13 @@ Available mesh strategies for `--mesh`:
 | `rtin`     | RtinMesh       | Adaptive RTIN, requires gridSize = 2^n+1         |
 | `simple`   | SimpleGridMesh | Uniform grid, no adaptive simplification         |
 
+Available elevation providers for `--provider`:
+
+| Value        | Provider                    | Description                          |
+|--------------|-----------------------------|--------------------------------------|
+| `raster`     | PostGISElevationProvider    | PostGIS raster data (default)         |
+| `pointcloud` | PointCloudElevationProvider | PostGIS 3D point geometries (PointZ)  |
+
 ### Examples
 
 ```bash
@@ -147,15 +153,16 @@ gradle run
 # Custom extent with RTIN strategy
 gradle run --args="--minX 10.7078 --maxX 10.8926 --minY 47.5541 --maxY 47.6156 --mesh rtin --zoom 12"
 
+# Point cloud provider with custom DB connection
+gradle run --args="--provider pointcloud -d jdbc:postgresql://myhost:5432/mydb -u admin --password secret -t lidar_points"
+
 # Simple grid mesh with higher zoom and tighter error
 gradle run --args="--mesh simple --zoom 14 --error 2.0 --output output/terrain/"
 ```
 
 ## Building & Running
 
-Requires Java 21+ and a PostGIS database with raster elevation data.
-
-Configure the database connection in `ElevationProvider.java`, then run:
+Requires Java 21+ and a PostGIS database with elevation data (raster or point cloud).
 
 ```bash
 gradle run

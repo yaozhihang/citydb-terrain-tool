@@ -1,4 +1,4 @@
-package org.citydb.raster.provider;
+package org.citydb.terrain.provider;
 
 import org.geotools.api.referencing.crs.CoordinateReferenceSystem;
 import org.geotools.api.referencing.operation.MathTransform;

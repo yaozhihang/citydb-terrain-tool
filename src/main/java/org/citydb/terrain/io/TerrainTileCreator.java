@@ -1,11 +1,11 @@
-package org.citydb.raster.io;
+package org.citydb.terrain.io;
 
-import org.citydb.raster.mesh.MeshResult;
-import org.citydb.raster.mesh.MeshStrategy;
-import org.citydb.raster.provider.ElevationProvider;
-import org.citydb.raster.util.BoundingSphere;
-import org.citydb.raster.util.Cartesian3;
-import org.citydb.raster.util.CoordinateUtils;
+import org.citydb.terrain.mesh.MeshResult;
+import org.citydb.terrain.mesh.MeshStrategy;
+import org.citydb.terrain.provider.ElevationProvider;
+import org.citydb.terrain.util.BoundingSphere;
+import org.citydb.terrain.util.Cartesian3;
+import org.citydb.terrain.util.CoordinateUtils;
 
 import java.io.File;
 import java.util.List;

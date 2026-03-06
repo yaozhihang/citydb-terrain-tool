@@ -1,4 +1,4 @@
-package org.citydb.raster.mesh;
+package org.citydb.terrain.mesh;
 
 /**
  * Result of a mesh generation strategy.

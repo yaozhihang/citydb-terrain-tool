@@ -1,4 +1,4 @@
-package org.citydb.raster.provider;
+package org.citydb.terrain.provider;
 
 import java.util.Map;
 
