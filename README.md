@@ -5,14 +5,28 @@ Generates [Cesium quantized-mesh](https://github.com/CesiumGS/quantized-mesh) te
 ## Architecture
 
 ```
-TerrainTileApp           – Entry point, configures zoom levels and tile generation
-ElevationProvider        – Fetches raster elevation from PostGIS, handles edge caching
-GeoTiffToQuantizedMesh   – Orchestrates per-tile pipeline (elevation → mesh → binary)
-MeshStrategy             – Interface for mesh generation algorithms
-├── RtinMesh             – RTIN (Right-Triangulated Irregular Network) mesh generator
-└── DelaunayMesh         – Delaunay triangulation-based mesh generator
-QuantizedMeshWriter      – Encodes mesh into Cesium's binary .terrain format
-CoordinateUtils          – WGS84/ECEF/TMS coordinate conversions
+org.citydb.raster
+└── TerrainTileApp              – CLI entry point, parses arguments
+
+org.citydb.raster.mesh
+├── MeshStrategy                – Interface for mesh generation algorithms
+├── MeshResult                  – Mesh output (vertices, triangles, edges)
+├── RtinMesh                    – RTIN adaptive mesh generator
+├── DelaunayMesh                – Delaunay adaptive mesh generator
+└── SimpleGridMesh              – Regular-grid mesh (no simplification)
+
+org.citydb.raster.io
+├── TerrainTileGenerator        – Orchestrates multi-zoom tile generation
+├── GeoTiffToQuantizedMesh      – Per-tile pipeline (elevation → mesh → binary)
+├── QuantizedMeshWriter         – Encodes mesh into Cesium .terrain format
+├── ElevationProvider           – Fetches elevation from PostGIS
+├── RasterImporter              – Imports GeoTIFF files into PostGIS
+└── XYZToGeoTIFF                – Converts XYZ point files to GeoTIFF
+
+org.citydb.raster.util
+├── CoordinateUtils             – WGS84/ECEF/TMS coordinate conversions
+├── BoundingSphere              – Bounding sphere computation
+└── Cartesian3                  – 3D vector math, horizon culling
 ```
 
 ## Mesh Strategies
@@ -34,6 +48,15 @@ Bowyer-Watson incremental Delaunay triangulation with greedy vertex insertion.
 - Starts with all edge vertices + regular interior seed grid
 - Greedily inserts the grid point with the highest interpolation error
 - Produces well-shaped triangles (maximizes minimum angle)
+
+### SimpleGridMesh
+
+Uniform regular-grid triangulation. Every grid cell is split into two triangles with no adaptive simplification.
+
+- **Any grid size** (no constraints)
+- All grid points become vertices — produces a dense, uniform mesh
+- `maxError` and `maxTriangleSpan` parameters are ignored
+- Useful when consistent mesh density is preferred over adaptive simplification
 
 ## Zoom Level & Grid Size Selection
 
@@ -84,26 +107,62 @@ int currentGridSize = (t == zoomLevel) ? 129 : 33;  // 2^7+1 at max zoom
 ### Constraints
 
 - **RTIN** requires `gridSize = 2^n + 1`: valid values are 3, 5, 9, 17, 33, 65, 129, 257, 513, 1025...
-- **Delaunay** accepts any grid size
+- **Delaunay** and **Simple** accept any grid size
 - **Quantized-mesh format** uses 16-bit vertex indices: max **65,535 vertices** per tile. With adaptive meshing this is rarely hit, but avoid `maxError = 0` with large grid sizes.
 
-## Configuration Parameters
+## CLI Parameters
 
-| Parameter          | Description                                                     |
-|--------------------|-----------------------------------------------------------------|
-| `zoomLevel`        | Maximum zoom level to generate                                  |
-| `gridSize`         | Grid side length at normal zoom levels (default: 33)            |
-| `baseError`        | Max interpolation error in meters at max zoom (default: 5.0)    |
-| `maxTriangleSpan`  | Max grid cells a triangle edge may span (controls min density)  |
-| `outputFolder`     | Output directory for .terrain files and layer.json              |
+All parameters have sensible defaults and can be overridden via command-line options:
+
+```
+Usage: TerrainTileApp [options]
+
+Options:
+  --minX <lon>      West extent longitude             (default: 8.97205)
+  --maxX <lon>      East extent longitude             (default: 13.84636)
+  --minY <lat>      South extent latitude             (default: 47.26887)
+  --maxY <lat>      North extent latitude             (default: 50.56651)
+  --gridSize <n>    Grid size, must be 2^n+1 for RTIN (default: 33)
+  --zoom <n>        Max zoom level                    (default: 10)
+  --error <m>       Base error in meters              (default: 5.0)
+  --output <dir>    Output folder                     (default: viewer/terrain/)
+  --mesh <type>     Mesh strategy                     (default: delaunay)
+  -h, --help        Show help message
+```
+
+Available mesh strategies for `--mesh`:
+
+| Value      | Strategy        | Description                                     |
+|------------|----------------|-------------------------------------------------|
+| `delaunay` | DelaunayMesh   | Adaptive Delaunay triangulation (default)        |
+| `rtin`     | RtinMesh       | Adaptive RTIN, requires gridSize = 2^n+1         |
+| `simple`   | SimpleGridMesh | Uniform grid, no adaptive simplification         |
+
+### Examples
+
+```bash
+# Run with defaults (Bavaria extent, Delaunay mesh, zoom 10)
+gradle run
+
+# Custom extent with RTIN strategy
+gradle run --args="--minX 10.7078 --maxX 10.8926 --minY 47.5541 --maxY 47.6156 --mesh rtin --zoom 12"
+
+# Simple grid mesh with higher zoom and tighter error
+gradle run --args="--mesh simple --zoom 14 --error 2.0 --output output/terrain/"
+```
 
 ## Building & Running
 
-Requires Java 11+ and a PostGIS database with raster elevation data.
+Requires Java 21+ and a PostGIS database with raster elevation data.
 
-Configure the database connection in `ElevationProvider.java`, then run `TerrainTileApp.main()`.
+Configure the database connection in `ElevationProvider.java`, then run:
 
-Output is written to the configured `outputFolder` in TMS layout:
+```bash
+gradle run
+gradle run --args="--help"
+```
+
+Output is written to the configured output folder in TMS layout:
 
 ```
 viewer/terrain/

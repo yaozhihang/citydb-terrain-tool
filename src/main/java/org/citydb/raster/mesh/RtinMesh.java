@@ -1,4 +1,4 @@
-package org.citydb.raster;
+package org.citydb.raster.mesh;
 
 import java.util.*;
 

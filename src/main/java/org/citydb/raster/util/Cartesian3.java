@@ -1,6 +1,4 @@
-package org.citydb.raster;
-
-import java.util.List;
+package org.citydb.raster.util;
 
 public class Cartesian3 {
     public double x;

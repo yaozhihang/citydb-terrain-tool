@@ -1,4 +1,4 @@
-package org.citydb.raster;
+package org.citydb.raster.mesh;
 
 /**
  * Strategy interface for mesh generation from elevation grids.

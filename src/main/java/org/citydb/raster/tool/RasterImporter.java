@@ -1,4 +1,4 @@
-package org.citydb.raster;
+package org.citydb.raster.tool;
 
 import java.io.File;
 import java.io.FileInputStream;

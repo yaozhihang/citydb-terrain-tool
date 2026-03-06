@@ -26,6 +26,9 @@ dependencies {
     implementation "org.geotools:gt-main:${geotoolsVersion}"
     implementation "org.geotools:gt-epsg-hsql:${geotoolsVersion}"
 
+    // CLI
+    implementation 'commons-cli:commons-cli:1.9.0'
+
     // JSON
     implementation 'com.alibaba.fastjson2:fastjson2:2.0.47'
 

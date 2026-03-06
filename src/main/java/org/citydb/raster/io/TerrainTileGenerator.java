@@ -1,9 +1,11 @@
-package org.citydb.raster;
+package org.citydb.raster.io;
 
 import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONArray;
 import com.alibaba.fastjson2.JSONObject;
 import com.alibaba.fastjson2.JSONWriter;
+import org.citydb.raster.mesh.MeshStrategy;
+import org.citydb.raster.util.CoordinateUtils;
 
 import java.io.*;
 import java.time.Duration;
@@ -14,33 +16,39 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 
-public class TerrainTileApp {
+public class TerrainTileGenerator {
 
-    public static void main(String[] args) {
+    private final double minX, maxX, minY, maxY;
+    private final int gridSize;
+    private final int zoomLevel;
+    private final float baseError;
+    private final String outputFolder;
+    private final MeshStrategy meshStrategy;
 
+    public TerrainTileGenerator(double minX, double maxX, double minY, double maxY,
+                                int gridSize, int zoomLevel, float baseError,
+                                String outputFolder, MeshStrategy meshStrategy) {
+        this.minX = minX;
+        this.maxX = maxX;
+        this.minY = minY;
+        this.maxY = maxY;
+        this.gridSize = gridSize;
+        this.zoomLevel = zoomLevel;
+        this.baseError = baseError;
+        this.outputFolder = outputFolder;
+        this.meshStrategy = meshStrategy;
+    }
+
+    public void generate() {
         Instant start = Instant.now();
 
-        double minX = 8.97205;
-        double maxX = 13.84636;
-        double minY = 47.26887;
-        double maxY = 50.56651;
-
-/*        double minX = 10.7078;
-        double maxX = 10.8926;
-        double minY = 47.5541;
-        double maxY = 47.6156;*/
-        int gridSize = 33; // 2^5+1, for normal zoom levels
-        int zoomLevel = 10;
-        float baseError = 5.0f; // meters
-
-        String outputFolder = "viewer/terrain/";
         double[] dataExtent = {minX, maxX, minY, maxY};
 
         // Skip DB until the extent spans at least this many tiles (detail becomes visible)
         int minTilesVisible = 8;
         double extentSpan = Math.min(maxX - minX, maxY - minY);
         int skipDbZoom = (int) (Math.log(minTilesVisible * 180.0 / extentSpan) / Math.log(2));
-        MeshStrategy meshStrategy = new DelaunayMesh();
+
         ElevationProvider provider = new ElevationProvider();
         Map<String, double[]> cacheMap = new ConcurrentHashMap<>();
 
@@ -115,13 +123,13 @@ public class TerrainTileApp {
         provider.close();
 
         // Finalize layer JSON
-        createLayerJson(outputFolder, zoomLevel, availableTiles);
+        createLayerJson();
 
         System.out.println("All tiles created successfully!");
         System.out.println("Total execution time: " + formatElapsedTime(Duration.between(start, Instant.now())));
     }
 
-    private static void createLayerJson(String outputFolder, int zoomLevel, int[][] availableTiles) {
+    private void createLayerJson() {
         JSONObject layerJson = new JSONObject();
 
         layerJson.put("tilejson", "2.1.0");
@@ -141,12 +149,19 @@ public class TerrainTileApp {
         layerJson.put("projection", "EPSG:4326");
 
         JSONArray availableTilesArray = new JSONArray();
-        for (int i = 0; i <= zoomLevel; i++) {
+        for (int t = 0; t <= zoomLevel; t++) {
+            int[] tileMinBound = CoordinateUtils.lonLatToTile(minX, minY, t);
+            int[] tileMaxBound = CoordinateUtils.lonLatToTile(maxX, maxY, t);
+
+            if (t == 0) {
+                tileMinBound = new int[]{0, 0};
+            }
+
             JSONObject levelInfo = new JSONObject();
-            levelInfo.put("startX", availableTiles[i][0]);
-            levelInfo.put("startY", availableTiles[i][1]);
-            levelInfo.put("endX", availableTiles[i][2]);
-            levelInfo.put("endY", availableTiles[i][3]);
+            levelInfo.put("startX", tileMinBound[0]);
+            levelInfo.put("startY", tileMinBound[1]);
+            levelInfo.put("endX", tileMaxBound[0]);
+            levelInfo.put("endY", tileMaxBound[1]);
             JSONArray levelInfoArray = new JSONArray();
             levelInfoArray.add(levelInfo);
             availableTilesArray.add(levelInfoArray);

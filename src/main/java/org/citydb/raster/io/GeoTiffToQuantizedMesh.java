@@ -1,4 +1,10 @@
-package org.citydb.raster;
+package org.citydb.raster.io;
+
+import org.citydb.raster.mesh.MeshResult;
+import org.citydb.raster.mesh.MeshStrategy;
+import org.citydb.raster.util.BoundingSphere;
+import org.citydb.raster.util.Cartesian3;
+import org.citydb.raster.util.CoordinateUtils;
 
 import java.io.File;
 import java.util.List;

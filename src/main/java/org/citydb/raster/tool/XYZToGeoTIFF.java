@@ -1,4 +1,4 @@
-package org.citydb.raster;
+package org.citydb.raster.tool;
 
 import org.geotools.api.referencing.crs.CoordinateReferenceSystem;
 import org.geotools.coverage.grid.GridCoverage2D;
@@ -56,14 +56,6 @@ public class XYZToGeoTIFF {
         } catch (Exception e) {
             e.printStackTrace();
         }
-
-/*        String inputFilePath = "C:\\Temp\\498_5543\\498_5543.txt";
-        String outputFilePath = "C:\\Temp\\498_5543\\geotiff_file.tif";
-
-
-        String outputFolder = "C:\\Temp\\raster";
-
-        createGeotiffFile(inputFilePath, outputFolder);*/
     }
 
 

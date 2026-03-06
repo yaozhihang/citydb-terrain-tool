@@ -1,14 +1,14 @@
-package org.citydb.raster;
+package org.citydb.raster.util;
 
 import java.util.List;
 
 public class BoundingSphere {
 
     // A class to represent a 3D point
-    static class Point3D {
-        double x, y, z;
+    public static class Point3D {
+        public double x, y, z;
 
-        Point3D(double x, double y, double z) {
+        public Point3D(double x, double y, double z) {
             this.x = x;
             this.y = y;
             this.z = z;
@@ -23,9 +23,9 @@ public class BoundingSphere {
     }
 
     // A class to represent a sphere
-    static class Sphere {
-        Point3D center;
-        double radius;
+    public static class Sphere {
+        public Point3D center;
+        public double radius;
 
         Sphere(Point3D center, double radius) {
             this.center = center;
