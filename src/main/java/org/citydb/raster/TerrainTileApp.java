@@ -40,7 +40,7 @@ public class TerrainTileApp {
         int minTilesVisible = 8;
         double extentSpan = Math.min(maxX - minX, maxY - minY);
         int skipDbZoom = (int) (Math.log(minTilesVisible * 180.0 / extentSpan) / Math.log(2));
-        MeshStrategy meshStrategy = new RtinMesh();
+        MeshStrategy meshStrategy = new DelaunayMesh();
         ElevationProvider provider = new ElevationProvider();
         Map<String, double[]> cacheMap = new ConcurrentHashMap<>();
 
