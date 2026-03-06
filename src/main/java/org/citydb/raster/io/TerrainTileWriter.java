@@ -9,7 +9,7 @@ import java.io.*;
  * Handles vertex quantization, delta + zigzag encoding, high-water-mark
  * index encoding, and the binary layout defined by the Cesium terrain spec.
  */
-public class QuantizedMeshWriter {
+public class TerrainTileWriter {
 
     /**
      * Quantize mesh vertices and write a complete quantized-mesh .terrain file.

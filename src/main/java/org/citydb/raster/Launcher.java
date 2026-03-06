@@ -1,8 +1,10 @@
 package org.citydb.raster;
 
 import org.apache.commons.cli.*;
-import org.citydb.raster.io.TerrainTileGenerator;
+import org.citydb.raster.io.TerrainGenerator;
 import org.citydb.raster.mesh.*;
+import org.citydb.raster.provider.ElevationProvider;
+import org.citydb.raster.provider.PostGISElevationProvider;
 
 public class Launcher {
 
@@ -95,11 +97,12 @@ public class Launcher {
             float baseError = (float) parseDouble(cmd, "error", 5.0);
             String outputFolder = cmd.getOptionValue("output", "viewer/terrain/");
             MeshStrategy meshStrategy = createMeshStrategy(cmd.getOptionValue("mesh", "delaunay"));
+            ElevationProvider elevationProvider = new PostGISElevationProvider();
 
-            TerrainTileGenerator generator = new TerrainTileGenerator(
+            TerrainGenerator generator = new TerrainGenerator(
                     minX, maxX, minY, maxY,
                     gridSize, zoomLevel, baseError,
-                    outputFolder, meshStrategy);
+                    outputFolder, meshStrategy, elevationProvider);
 
             generator.generate();
 

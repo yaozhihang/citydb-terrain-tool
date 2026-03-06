@@ -2,6 +2,7 @@ package org.citydb.raster.io;
 
 import org.citydb.raster.mesh.MeshResult;
 import org.citydb.raster.mesh.MeshStrategy;
+import org.citydb.raster.provider.ElevationProvider;
 import org.citydb.raster.util.BoundingSphere;
 import org.citydb.raster.util.Cartesian3;
 import org.citydb.raster.util.CoordinateUtils;
@@ -10,13 +11,13 @@ import java.io.File;
 import java.util.List;
 import java.util.Map;
 
-public class GeoTiffToQuantizedMesh {
+public class TerrainTileCreator {
 
     public static void createTMSTile(ElevationProvider provider, MeshStrategy meshStrategy,
-                                      String outputFolder, int zoom, int tileX, int tileY,
-                                      int gridSize, float maxError, int maxTriangleSpan,
-                                      Map<String, double[]> cacheMap, double[] dataExtent,
-                                      int skipDbZoom) throws Exception {
+                                     String outputFolder, int zoom, int tileX, int tileY,
+                                     int gridSize, float maxError, int maxTriangleSpan,
+                                     Map<String, double[]> cacheMap, double[] dataExtent,
+                                     int skipDbZoom) throws Exception {
         double[] bounds = CoordinateUtils.calculateTileBounds(tileX, tileY, zoom);
         double minX = bounds[0], maxX = bounds[1], minY = bounds[2], maxY = bounds[3];
 
@@ -100,7 +101,7 @@ public class GeoTiffToQuantizedMesh {
         String filePath = outputFolder + zoom + File.separator + tileX + File.separator + tileY + ".terrain";
         createFolder(filePath);
 
-        QuantizedMeshWriter.write(filePath,
+        TerrainTileWriter.write(filePath,
                 centerX, centerY, centerZ,
                 bCenterX, bCenterY, bCenterZ,
                 radius, minHeight, maxHeight,

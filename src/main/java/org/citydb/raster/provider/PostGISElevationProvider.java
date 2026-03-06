@@ -1,4 +1,4 @@
-package org.citydb.raster.io;
+package org.citydb.raster.provider;
 
 import org.geotools.api.referencing.crs.CoordinateReferenceSystem;
 import org.geotools.api.referencing.operation.MathTransform;
@@ -22,7 +22,7 @@ import java.util.Map;
  * Provides elevation data by fetching rasters from a PostGIS database
  * and sampling them into grids suitable for terrain tile generation.
  */
-public class ElevationProvider {
+public class PostGISElevationProvider implements ElevationProvider {
 
     // Cached CRS and transform (decoded once at class load)
     private static final CoordinateReferenceSystem CRS_WGS84;
@@ -41,7 +41,7 @@ public class ElevationProvider {
 
     private final DataSource dataSource;
 
-    public ElevationProvider() {
+    public PostGISElevationProvider() {
         PoolProperties p = new PoolProperties();
         p.setUrl("jdbc:postgresql://localhost:5432/bayern_dem_raster");
         p.setUsername("postgres");
@@ -58,25 +58,14 @@ public class ElevationProvider {
         dataSource.setPoolProperties(p);
     }
 
+    @Override
     public void close() {
         dataSource.close();
     }
 
-    /**
-     * Fetch and prepare a complete elevation grid for a tile.
-     * Combines raster sampling, smoothing, and edge caching into one call.
-     *
-     * @param bounds    tile bounds [minLon, maxLon, minLat, maxLat]
-     * @param gridSize  side length of the square grid
-     * @param zoom      zoom level (used for edge cache keys)
-     * @param tileX     tile X coordinate (used for edge cache keys)
-     * @param tileY     tile Y coordinate (used for edge cache keys)
-     * @param cacheMap  shared edge cache for seamless tile boundaries
-     * @param doStart   whether to actually fetch raster data (false = all zeros)
-     * @return filled elevation grid [x][y]
-     */
+    @Override
     public double[][] fetchElevationGrid(double[] bounds, int gridSize, int zoom, int tileX, int tileY,
-                                          Map<String, double[]> cacheMap, boolean doStart) throws Exception {
+                                          Map<String, double[]> cacheMap, boolean queryData) throws Exception {
         double minX = bounds[0];
         double maxX = bounds[1];
         double minY = bounds[2];
@@ -86,7 +75,7 @@ public class ElevationProvider {
 
         double[][] elevationData = new double[gridSize][gridSize];
 
-        if (doStart) {
+        if (queryData) {
             GridCoverage2D coverage = getGeoTiffFromDB(minX, minY, maxX, maxY, gridSize, gridSize);
             if (coverage != null) {
                 sampleRasterToGrid(coverage, elevationData, gridSize, minX, minY, cellSizeX, cellSizeY);

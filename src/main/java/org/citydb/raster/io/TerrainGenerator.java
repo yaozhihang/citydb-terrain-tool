@@ -5,6 +5,7 @@ import com.alibaba.fastjson2.JSONArray;
 import com.alibaba.fastjson2.JSONObject;
 import com.alibaba.fastjson2.JSONWriter;
 import org.citydb.raster.mesh.MeshStrategy;
+import org.citydb.raster.provider.ElevationProvider;
 import org.citydb.raster.util.CoordinateUtils;
 
 import java.io.*;
@@ -16,7 +17,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 
-public class TerrainTileGenerator {
+public class TerrainGenerator {
 
     private final double minX, maxX, minY, maxY;
     private final int gridSize;
@@ -24,10 +25,12 @@ public class TerrainTileGenerator {
     private final float baseError;
     private final String outputFolder;
     private final MeshStrategy meshStrategy;
+    private final ElevationProvider elevationProvider;
 
-    public TerrainTileGenerator(double minX, double maxX, double minY, double maxY,
-                                int gridSize, int zoomLevel, float baseError,
-                                String outputFolder, MeshStrategy meshStrategy) {
+    public TerrainGenerator(double minX, double maxX, double minY, double maxY,
+                            int gridSize, int zoomLevel, float baseError,
+                            String outputFolder, MeshStrategy meshStrategy,
+                            ElevationProvider elevationProvider) {
         this.minX = minX;
         this.maxX = maxX;
         this.minY = minY;
@@ -37,6 +40,7 @@ public class TerrainTileGenerator {
         this.baseError = baseError;
         this.outputFolder = outputFolder;
         this.meshStrategy = meshStrategy;
+        this.elevationProvider = elevationProvider;
     }
 
     public void generate() {
@@ -49,7 +53,6 @@ public class TerrainTileGenerator {
         double extentSpan = Math.min(maxX - minX, maxY - minY);
         int skipDbZoom = (int) (Math.log(minTilesVisible * 180.0 / extentSpan) / Math.log(2));
 
-        ElevationProvider provider = new ElevationProvider();
         Map<String, double[]> cacheMap = new ConcurrentHashMap<>();
 
         int availableProcessors = Runtime.getRuntime().availableProcessors();
@@ -98,7 +101,7 @@ public class TerrainTileGenerator {
                     int finalMaxTriangleSpan = maxTriangleSpan;
                     executor.submit(() -> {
                         try {
-                            GeoTiffToQuantizedMesh.createTMSTile(provider, meshStrategy, outputFolder, finalT, finalI, finalJ, finalGridSize, finalMaxError, finalMaxTriangleSpan, cacheMap, dataExtent, skipDbZoom);
+                            TerrainTileCreator.createTMSTile(elevationProvider, meshStrategy, outputFolder, finalT, finalI, finalJ, finalGridSize, finalMaxError, finalMaxTriangleSpan, cacheMap, dataExtent, skipDbZoom);
                             System.out.println("Remaining tiles: " + counter.getAndDecrement());
                         } catch (Exception e) {
                             e.printStackTrace();
@@ -119,8 +122,8 @@ public class TerrainTileGenerator {
             }
         }
 
-        // Close connection pool
-        provider.close();
+        // Close elevation provider
+        elevationProvider.close();
 
         // Finalize layer JSON
         createLayerJson();
