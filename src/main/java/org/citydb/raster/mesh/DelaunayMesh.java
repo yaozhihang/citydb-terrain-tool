@@ -23,18 +23,21 @@ public class DelaunayMesh implements MeshStrategy {
         pts.add(new double[]{gridSize / 2.0, m * 3});
         tris.add(new int[]{0, 1, 2});
 
-        // Insert all edge grid points (required for seamless tile stitching)
-        for (int i = 0; i < gridSize; i++) {
+        // Seed edges and interior at step intervals to enforce maxTriangleSpan.
+        // The greedy error phase will add more edge/interior points where needed.
+        int step = Math.max(1, maxTriangleSpan);
+        for (int i = 0; i < gridSize - 1; i += step) {
             insertGridPt(pts, tris, gridToIdx, i, 0);
             insertGridPt(pts, tris, gridToIdx, i, gridSize - 1);
-        }
-        for (int i = 1; i < gridSize - 1; i++) {
             insertGridPt(pts, tris, gridToIdx, 0, i);
             insertGridPt(pts, tris, gridToIdx, gridSize - 1, i);
         }
+        // Ensure last edge point (corners) are always included
+        insertGridPt(pts, tris, gridToIdx, gridSize - 1, 0);
+        insertGridPt(pts, tris, gridToIdx, gridSize - 1, gridSize - 1);
+        insertGridPt(pts, tris, gridToIdx, 0, gridSize - 1);
 
-        // Seed interior with regular grid to enforce maxTriangleSpan
-        int step = Math.max(1, maxTriangleSpan);
+        // Seed interior
         for (int y = step; y < gridSize - 1; y += step) {
             for (int x = step; x < gridSize - 1; x += step) {
                 insertGridPt(pts, tris, gridToIdx, x, y);
