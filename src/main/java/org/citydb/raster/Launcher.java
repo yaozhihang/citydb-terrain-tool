@@ -4,6 +4,7 @@ import org.apache.commons.cli.*;
 import org.citydb.raster.io.TerrainGenerator;
 import org.citydb.raster.mesh.*;
 import org.citydb.raster.provider.ElevationProvider;
+import org.citydb.raster.provider.PointCloudElevationProvider;
 import org.citydb.raster.provider.PostGISElevationProvider;
 
 public class Launcher {
@@ -72,6 +73,36 @@ public class Launcher {
                 .desc("Mesh strategy: delaunay, rtin, simple (default: delaunay)")
                 .build());
 
+        options.addOption(Option.builder("p")
+                .longOpt("provider")
+                .hasArg()
+                .desc("Elevation provider: raster, pointcloud (default: raster)")
+                .build());
+
+        options.addOption(Option.builder("d")
+                .longOpt("db")
+                .hasArg()
+                .desc("JDBC database URL (default: jdbc:postgresql://localhost:5432/bayern_dem_raster)")
+                .build());
+
+        options.addOption(Option.builder("u")
+                .longOpt("user")
+                .hasArg()
+                .desc("Database username (default: postgres)")
+                .build());
+
+        options.addOption(Option.builder()
+                .longOpt("password")
+                .hasArg()
+                .desc("Database password (default: 125125)")
+                .build());
+
+        options.addOption(Option.builder("t")
+                .longOpt("table")
+                .hasArg()
+                .desc("Database table name (default: raster_table or point_cloud)")
+                .build());
+
         options.addOption(Option.builder("h")
                 .longOpt("help")
                 .desc("Print this help message")
@@ -97,7 +128,15 @@ public class Launcher {
             float baseError = (float) parseDouble(cmd, "error", 5.0);
             String outputFolder = cmd.getOptionValue("output", "viewer/terrain/");
             MeshStrategy meshStrategy = createMeshStrategy(cmd.getOptionValue("mesh", "delaunay"));
-            ElevationProvider elevationProvider = new PostGISElevationProvider();
+
+            String dbUrl = cmd.getOptionValue("db", "jdbc:postgresql://localhost:5432/bayern_dem_raster");
+            String dbUser = cmd.getOptionValue("user", "postgres");
+            String dbPassword = cmd.getOptionValue("password", "125125");
+            String providerType = cmd.getOptionValue("provider", "raster");
+            String tableName = cmd.getOptionValue("table",
+                    providerType.equalsIgnoreCase("pointcloud") ? "point_cloud" : "raster_table");
+
+            ElevationProvider elevationProvider = createElevationProvider(providerType, dbUrl, dbUser, dbPassword, tableName);
 
             TerrainGenerator generator = new TerrainGenerator(
                     minX, maxX, minY, maxY,
@@ -115,6 +154,17 @@ public class Launcher {
             e.printStackTrace();
             System.exit(1);
         }
+    }
+
+    private static ElevationProvider createElevationProvider(String type, String url, String user, String password, String table) {
+        return switch (type.toLowerCase()) {
+            case "raster" -> new PostGISElevationProvider(url, user, password, table);
+            case "pointcloud" -> new PointCloudElevationProvider(url, user, password, table);
+            default -> {
+                System.err.println("Unknown provider: " + type + ". Using raster.");
+                yield new PostGISElevationProvider(url, user, password, table);
+            }
+        };
     }
 
     private static MeshStrategy createMeshStrategy(String type) {

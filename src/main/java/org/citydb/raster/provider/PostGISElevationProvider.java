@@ -9,15 +9,14 @@ import org.geotools.geometry.jts.ReferencedEnvelope;
 import org.geotools.referencing.CRS;
 
 import org.apache.tomcat.jdbc.pool.DataSource;
-import org.apache.tomcat.jdbc.pool.PoolProperties;
 
 import java.awt.image.Raster;
 import java.io.ByteArrayInputStream;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.sql.Statement;
 import java.util.Map;
-import java.util.function.IntUnaryOperator;
 
 /**
  * Provides elevation data by fetching rasters from a PostGIS database
@@ -26,22 +25,18 @@ import java.util.function.IntUnaryOperator;
 public class PostGISElevationProvider implements ElevationProvider {
 
     private static final CoordinateReferenceSystem CRS_WGS84;
-    private static final CoordinateReferenceSystem CRS_UTM32;
-    private static final MathTransform WGS84_TO_UTM32;
 
     static {
         try {
             CRS_WGS84 = CRS.decode("EPSG:4326");
-            CRS_UTM32 = CRS.decode("EPSG:25832");
-            WGS84_TO_UTM32 = CRS.findMathTransform(CRS_WGS84, CRS_UTM32, true);
         } catch (Exception e) {
             throw new ExceptionInInitializerError(e);
         }
     }
 
-    private static final String RASTER_QUERY = """
+    private static final String RASTER_QUERY_TEMPLATE = """
             WITH bbox AS (
-                SELECT ST_MakeEnvelope(?, ?, ?, ?, 25832) AS geom
+                SELECT ST_MakeEnvelope(?, ?, ?, ?, %d) AS geom
             )
             SELECT ST_AsGDALRaster(ST_Union(ST_Resample(
                        r.rast,
@@ -50,29 +45,43 @@ public class PostGISElevationProvider implements ElevationProvider {
                            ?, ?,
                            ?, ?,
                            0, 0,
-                           25832
+                           %d
                        )
                    , 'Avg'), 'MAX'), 'GTiff') AS resampled_raster
-            FROM raster_table r, bbox b
+            FROM %s r, bbox b
             WHERE ST_Intersects(r.rast, b.geom)""";
 
     private final DataSource dataSource;
+    private final String tableName;
+    private final int srid;
+    private final CoordinateReferenceSystem rasterCrs;
+    private final MathTransform wgs84ToRasterCrs;
+    private final String rasterQuery;
 
-    public PostGISElevationProvider() {
-        PoolProperties p = new PoolProperties();
-        p.setUrl("jdbc:postgresql://localhost:5432/bayern_dem_raster");
-        p.setUsername("postgres");
-        p.setPassword("125125");
-        p.setDriverClassName("org.postgresql.Driver");
-        p.setMaxActive(Runtime.getRuntime().availableProcessors());
-        p.setMaxIdle(Runtime.getRuntime().availableProcessors());
-        p.setMinIdle(2);
-        p.setInitialSize(2);
-        p.setMaxWait(10000);
-        p.setTestOnBorrow(true);
-        p.setValidationQuery("SELECT 1");
-        dataSource = new DataSource();
-        dataSource.setPoolProperties(p);
+    public PostGISElevationProvider(String url, String user, String password, String tableName) {
+        this.tableName = tableName;
+        this.dataSource = ElevationGridUtils.createDataSource(url, user, password);
+
+        try {
+            srid = queryRasterSrid();
+            rasterCrs = CRS.decode("EPSG:" + srid);
+            wgs84ToRasterCrs = CRS.findMathTransform(CRS_WGS84, rasterCrs, true);
+            rasterQuery = RASTER_QUERY_TEMPLATE.formatted(srid, srid, tableName);
+            System.out.println("Raster table: " + tableName + ", SRID: EPSG:" + srid);
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to initialize elevation provider", e);
+        }
+    }
+
+    private int queryRasterSrid() throws Exception {
+        try (Connection conn = dataSource.getConnection();
+             Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery("SELECT ST_SRID(rast) FROM " + tableName + " LIMIT 1")) {
+            if (rs.next()) {
+                return rs.getInt(1);
+            }
+            throw new IllegalStateException(tableName + " is empty, cannot determine SRID");
+        }
     }
 
     @Override
@@ -93,11 +102,11 @@ public class PostGISElevationProvider implements ElevationProvider {
             GridCoverage2D coverage = getGeoTiffFromDB(minX, minY, maxX, maxY, gridSize, gridSize);
             if (coverage != null) {
                 sampleRasterToGrid(coverage, elevationData, gridSize, minX, minY, cellSizeX, cellSizeY);
-                elevationData = smoothGrid(elevationData);
+                elevationData = ElevationGridUtils.smoothGrid(elevationData);
             }
         }
 
-        applyEdgeCache(elevationData, gridSize, zoom, tileX, tileY, cacheMap);
+        ElevationGridUtils.applyEdgeCache(elevationData, gridSize, zoom, tileX, tileY, cacheMap);
 
         return elevationData;
     }
@@ -107,7 +116,6 @@ public class PostGISElevationProvider implements ElevationProvider {
                                      double cellSizeX, double cellSizeY) throws Exception {
         int numPts = gridSize * gridSize;
 
-        // Pre-compute all WGS84 coords as flat double[] (lat, lon pairs for EPSG:4326)
         double[] srcPts = new double[numPts * 2];
         for (int y = 0; y < gridSize; y++) {
             for (int x = 0; x < gridSize; x++) {
@@ -117,18 +125,15 @@ public class PostGISElevationProvider implements ElevationProvider {
             }
         }
 
-        // Batch transform WGS84 -> UTM32
-        double[] utmPts = new double[numPts * 2];
-        WGS84_TO_UTM32.transform(srcPts, 0, utmPts, 0, numPts);
+        double[] projPts = new double[numPts * 2];
+        wgs84ToRasterCrs.transform(srcPts, 0, projPts, 0, numPts);
 
-        // World-to-pixel transform
         GridGeometry2D gridGeometry = coverage.getGridGeometry();
         MathTransform crsToGrid = gridGeometry.getGridToCRS2D().inverse();
 
         double[] pixelPts = new double[numPts * 2];
-        crsToGrid.transform(utmPts, 0, pixelPts, 0, numPts);
+        crsToGrid.transform(projPts, 0, pixelPts, 0, numPts);
 
-        // Read elevations directly from raster
         Raster raster = coverage.getRenderedImage().getData();
         int rasterW = raster.getWidth();
         int rasterH = raster.getHeight();
@@ -150,73 +155,22 @@ public class PostGISElevationProvider implements ElevationProvider {
         }
     }
 
-    private static void applyEdgeCache(double[][] elevationData, int gridSize,
-                                         int zoom, int tileX, int tileY,
-                                         Map<String, double[]> cacheMap) {
-        int gs = gridSize - 1;
-
-        // Shared edges — whichever tile reaches the key first stores its values;
-        // the adjacent tile then adopts them for seamless boundaries.
-        cacheEdge(elevationData, gridSize, cacheMap,
-                zoom + "_" + (tileX - 1) + "_" + tileY + "_" + tileX + "_" + tileY,
-                i -> 0, i -> i);
-        cacheEdge(elevationData, gridSize, cacheMap,
-                zoom + "_" + tileX + "_" + tileY + "_" + (tileX + 1) + "_" + tileY,
-                i -> gs, i -> i);
-        cacheEdge(elevationData, gridSize, cacheMap,
-                zoom + "_" + tileX + "_" + (tileY - 1) + "_" + tileX + "_" + tileY,
-                i -> i, i -> 0);
-        cacheEdge(elevationData, gridSize, cacheMap,
-                zoom + "_" + tileX + "_" + tileY + "_" + tileX + "_" + (tileY + 1),
-                i -> i, i -> gs);
-
-        // Corner reconciliation: use separate corner keys so all tiles
-        // meeting at a corner agree on the same elevation value.
-        cacheCorner(elevationData, cacheMap, "c_" + zoom + "_" + tileX + "_" + tileY, 0, 0);
-        cacheCorner(elevationData, cacheMap, "c_" + zoom + "_" + (tileX + 1) + "_" + tileY, gs, 0);
-        cacheCorner(elevationData, cacheMap, "c_" + zoom + "_" + tileX + "_" + (tileY + 1), 0, gs);
-        cacheCorner(elevationData, cacheMap, "c_" + zoom + "_" + (tileX + 1) + "_" + (tileY + 1), gs, gs);
-    }
-
-    private static void cacheEdge(double[][] data, int gridSize, Map<String, double[]> cache,
-                                    String key, IntUnaryOperator xIdx, IntUnaryOperator yIdx) {
-        double[] values = new double[gridSize];
-        for (int i = 0; i < gridSize; i++) {
-            values[i] = data[xIdx.applyAsInt(i)][yIdx.applyAsInt(i)];
-        }
-        double[] existing = cache.putIfAbsent(key, values);
-        if (existing != null) {
-            for (int i = 0; i < gridSize; i++) {
-                data[xIdx.applyAsInt(i)][yIdx.applyAsInt(i)] = existing[i];
-            }
-        }
-    }
-
-    private static void cacheCorner(double[][] data, Map<String, double[]> cache,
-                                     String key, int x, int y) {
-        double[] val = {data[x][y]};
-        double[] existing = cache.putIfAbsent(key, val);
-        if (existing != null) {
-            data[x][y] = existing[0];
-        }
-    }
-
     private GridCoverage2D getGeoTiffFromDB(double minLon, double minLat, double maxLon, double maxLat,
                                              int columns, int rows) {
         try (
                 Connection conn = dataSource.getConnection();
-                PreparedStatement ps = conn.prepareStatement(RASTER_QUERY)
+                PreparedStatement ps = conn.prepareStatement(rasterQuery)
         ) {
             ReferencedEnvelope bboxWGS84 = new ReferencedEnvelope(minLat, maxLat, minLon, maxLon, CRS_WGS84);
-            ReferencedEnvelope bboxUTM32 = bboxWGS84.transform(CRS_UTM32, true);
+            ReferencedEnvelope bboxProj = bboxWGS84.transform(rasterCrs, true);
 
-            double xBuffer = bboxUTM32.getWidth() * 0.1;
-            double yBuffer = bboxUTM32.getHeight() * 0.1;
+            double xBuffer = bboxProj.getWidth() * 0.1;
+            double yBuffer = bboxProj.getHeight() * 0.1;
 
-            double xMin = bboxUTM32.getMinX() - xBuffer;
-            double yMin = bboxUTM32.getMinY() - yBuffer;
-            double xMax = bboxUTM32.getMaxX() + xBuffer;
-            double yMax = bboxUTM32.getMaxY() + yBuffer;
+            double xMin = bboxProj.getMinX() - xBuffer;
+            double yMin = bboxProj.getMinY() - yBuffer;
+            double xMax = bboxProj.getMaxX() + xBuffer;
+            double yMax = bboxProj.getMaxY() + yBuffer;
 
             double xRes = (xMax - xMin) / columns;
             double yRes = (yMax - yMin) / rows;
@@ -243,35 +197,5 @@ public class PostGISElevationProvider implements ElevationProvider {
         }
 
         return null;
-    }
-
-    static double[][] smoothGrid(double[][] grid) {
-        int rows = grid.length;
-        int cols = grid[0].length;
-        double[][] smoothedGrid = new double[rows][cols];
-
-        int[] dx = {-1, -1, -1, 0, 0, 1, 1, 1};
-        int[] dy = {-1, 0, 1, -1, 1, -1, 0, 1};
-
-        for (int i = 0; i < rows; i++) {
-            for (int j = 0; j < cols; j++) {
-                double sum = grid[i][j];
-                int count = 1;
-
-                for (int k = 0; k < 8; k++) {
-                    int ni = i + dx[k];
-                    int nj = j + dy[k];
-
-                    if (ni >= 0 && ni < rows && nj >= 0 && nj < cols) {
-                        sum += grid[ni][nj];
-                        count++;
-                    }
-                }
-
-                smoothedGrid[i][j] = sum / count;
-            }
-        }
-
-        return smoothedGrid;
     }
 }
