@@ -21,12 +21,10 @@ public class TerrainTileCreator {
         double[] bounds = CoordinateUtils.calculateTileBounds(tileX, tileY, zoom);
         double minX = bounds[0], maxX = bounds[1], minY = bounds[2], maxY = bounds[3];
 
-        // Skip DB query if: zoom <= skipDbZoom, or tile doesn't overlap data extent
         boolean queryDb = zoom > skipDbZoom
                 && minX < dataExtent[1] && maxX > dataExtent[0]
                 && minY < dataExtent[3] && maxY > dataExtent[2];
 
-        // Fetch elevation grid (includes raster sampling, smoothing, edge caching)
         double[][] elevationData = provider.fetchElevationGrid(bounds, gridSize, zoom, tileX, tileY, cacheMap, queryDb);
 
         // Compute height range
@@ -40,52 +38,29 @@ public class TerrainTileCreator {
         }
         double avgHeight = (minHeight + maxHeight) / 2;
 
-        // ECEF coordinates
-        double[] centerECEF = CoordinateUtils.convertWGSToECEF((minY + maxY) / 2, (minX + maxX) / 2, avgHeight);
-        double centerX = centerECEF[0];
-        double centerY = centerECEF[1];
-        double centerZ = centerECEF[2];
-
-        double[] cornerECEF1 = CoordinateUtils.convertWGSToECEF(minY, minX, avgHeight);
-        double cornerX1 = cornerECEF1[0];
-        double cornerY1 = cornerECEF1[1];
-        double cornerZ1 = cornerECEF1[2];
-
-        double[] cornerECEF2 = CoordinateUtils.convertWGSToECEF(maxY, maxX, avgHeight);
-        double cornerX2 = cornerECEF2[0];
-        double cornerY2 = cornerECEF2[1];
-        double cornerZ2 = cornerECEF2[2];
+        // ECEF coordinates for tile center and corners
+        double[] center = CoordinateUtils.convertWGSToECEF((minY + maxY) / 2, (minX + maxX) / 2, avgHeight);
+        double[] corner1 = CoordinateUtils.convertWGSToECEF(minY, minX, avgHeight);
+        double[] corner2 = CoordinateUtils.convertWGSToECEF(maxY, maxX, avgHeight);
 
         // Bounding sphere
-        List<BoundingSphere.Point3D> points = List.of(
-                new BoundingSphere.Point3D(cornerX1, cornerY1, cornerZ1),
-                new BoundingSphere.Point3D(cornerX2, cornerY2, cornerZ2),
-                new BoundingSphere.Point3D(centerX, centerY, centerZ)
-        );
-        BoundingSphere.Sphere boundingSphere = BoundingSphere.computeBoundingSphere(points);
-        double bCenterX = boundingSphere.center.x;
-        double bCenterY = boundingSphere.center.y;
-        double bCenterZ = boundingSphere.center.z;
-        double radius = boundingSphere.radius;
+        BoundingSphere.Sphere sphere = BoundingSphere.computeBoundingSphere(List.of(
+                new BoundingSphere.Point3D(corner1[0], corner1[1], corner1[2]),
+                new BoundingSphere.Point3D(corner2[0], corner2[1], corner2[2]),
+                new BoundingSphere.Point3D(center[0], center[1], center[2])));
 
         // Horizon culling point
-        double horizonCullingPointX, horizonCullingPointY, horizonCullingPointZ;
+        Cartesian3 horizon;
         if (tileX == 0 && (tileY == 1 || tileY == 0)) {
-            horizonCullingPointX = 60778941.306355275;
-            if (tileY == 1)
-                horizonCullingPointY = 9.925954381079006e+23;
-            else horizonCullingPointY = -9.925954381079006e+23;
-            horizonCullingPointZ = 0;
+            double horizonY = tileY == 1 ? 9.925954381079006e+23 : -9.925954381079006e+23;
+            horizon = new Cartesian3(60778941.306355275, horizonY, 0);
         } else {
             Cartesian3[] positions = {
-                    new Cartesian3(cornerX1, cornerY1, cornerZ1),
-                    new Cartesian3(cornerX2, cornerY2, cornerZ2)
+                    new Cartesian3(corner1[0], corner1[1], corner1[2]),
+                    new Cartesian3(corner2[0], corner2[1], corner2[2])
             };
-            Cartesian3 horizonCullingPoint = Cartesian3.computeHorizonCullingPoint(
-                    new Cartesian3(bCenterX, bCenterY, bCenterZ), positions);
-            horizonCullingPointX = horizonCullingPoint.x;
-            horizonCullingPointY = horizonCullingPoint.y;
-            horizonCullingPointZ = horizonCullingPoint.z;
+            horizon = Cartesian3.computeHorizonCullingPoint(
+                    new Cartesian3(sphere.center.x, sphere.center.y, sphere.center.z), positions);
         }
 
         // Flatten elevation grid and generate mesh
@@ -102,10 +77,10 @@ public class TerrainTileCreator {
         createFolder(filePath);
 
         TerrainTileWriter.write(filePath,
-                centerX, centerY, centerZ,
-                bCenterX, bCenterY, bCenterZ,
-                radius, minHeight, maxHeight,
-                horizonCullingPointX, horizonCullingPointY, horizonCullingPointZ,
+                center[0], center[1], center[2],
+                sphere.center.x, sphere.center.y, sphere.center.z,
+                sphere.radius, minHeight, maxHeight,
+                horizon.x, horizon.y, horizon.z,
                 mesh, elevationData, gridSize);
     }
 
@@ -113,9 +88,6 @@ public class TerrainTileCreator {
         File parentDir = new File(filePath).getParentFile();
         if (parentDir != null && !parentDir.exists()) {
             parentDir.mkdirs();
-            if (!parentDir.isDirectory()) {
-                System.err.println("Failed to create parent directories: " + parentDir);
-            }
         }
     }
 }

@@ -58,7 +58,6 @@ public class TerrainGenerator {
         int availableProcessors = Runtime.getRuntime().availableProcessors();
         ExecutorService executor = Executors.newFixedThreadPool(availableProcessors);
 
-        int[][] availableTiles = new int[zoomLevel + 1][4];
         int numTiles = 0;
 
         // Pre-calculate total number of tiles
@@ -89,8 +88,6 @@ public class TerrainGenerator {
             if (t <= 2) maxTriangleSpan = 1;       // zoom 0-2: every grid cell splits
             else if (t <= 4) maxTriangleSpan = 2;   // zoom 3-4: max 2-cell span
             else maxTriangleSpan = (currentGridSize - 1) / 8; // zoom 5+: original behavior
-
-            availableTiles[t] = new int[]{tileMinBound[0], tileMinBound[1], tileMaxBound[0], tileMaxBound[1]};
 
             for (int i = tileMinBound[0]; i <= tileMaxBound[0]; i++) {
                 for (int j = tileMinBound[1]; j <= tileMaxBound[1]; j++) {

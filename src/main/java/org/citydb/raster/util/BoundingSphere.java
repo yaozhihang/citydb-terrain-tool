@@ -76,21 +76,16 @@ public class BoundingSphere {
         return new Sphere(center, radius);
     }
 
-    // Helper method to find the farthest point from a given point
     private static Point3D findFarthestPoint(Point3D reference, List<Point3D> points) {
         Point3D farthest = null;
         double maxDistanceSquared = -1;
 
-        try {
-            for (Point3D point : points) {
-                double distanceSquared = reference.distanceSquared(point);
-                if (distanceSquared > maxDistanceSquared) {
-                    maxDistanceSquared = distanceSquared;
-                    farthest = point;
-                }
+        for (Point3D point : points) {
+            double distanceSquared = reference.distanceSquared(point);
+            if (distanceSquared > maxDistanceSquared) {
+                maxDistanceSquared = distanceSquared;
+                farthest = point;
             }
-        } catch (Exception e) {
-            e.printStackTrace();
         }
 
         return farthest;

@@ -17,6 +17,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.util.Map;
+import java.util.function.IntUnaryOperator;
 
 /**
  * Provides elevation data by fetching rasters from a PostGIS database
@@ -24,7 +25,6 @@ import java.util.Map;
  */
 public class PostGISElevationProvider implements ElevationProvider {
 
-    // Cached CRS and transform (decoded once at class load)
     private static final CoordinateReferenceSystem CRS_WGS84;
     private static final CoordinateReferenceSystem CRS_UTM32;
     private static final MathTransform WGS84_TO_UTM32;
@@ -38,6 +38,23 @@ public class PostGISElevationProvider implements ElevationProvider {
             throw new ExceptionInInitializerError(e);
         }
     }
+
+    private static final String RASTER_QUERY = """
+            WITH bbox AS (
+                SELECT ST_MakeEnvelope(?, ?, ?, ?, 25832) AS geom
+            )
+            SELECT ST_AsGDALRaster(ST_Union(ST_Resample(
+                       r.rast,
+                       ST_MakeEmptyRaster(
+                           ?, ?,
+                           ?, ?,
+                           ?, ?,
+                           0, 0,
+                           25832
+                       )
+                   , 'Avg'), 'MAX'), 'GTiff') AS resampled_raster
+            FROM raster_table r, bbox b
+            WHERE ST_Intersects(r.rast, b.geom)""";
 
     private final DataSource dataSource;
 
@@ -66,10 +83,7 @@ public class PostGISElevationProvider implements ElevationProvider {
     @Override
     public double[][] fetchElevationGrid(double[] bounds, int gridSize, int zoom, int tileX, int tileY,
                                           Map<String, double[]> cacheMap, boolean queryData) throws Exception {
-        double minX = bounds[0];
-        double maxX = bounds[1];
-        double minY = bounds[2];
-        double maxY = bounds[3];
+        double minX = bounds[0], maxX = bounds[1], minY = bounds[2], maxY = bounds[3];
         double cellSizeX = (maxX - minX) / (gridSize - 1);
         double cellSizeY = (maxY - minY) / (gridSize - 1);
 
@@ -83,8 +97,6 @@ public class PostGISElevationProvider implements ElevationProvider {
             }
         }
 
-        // Always apply edge cache — even flat/empty tiles must participate
-        // so they can adopt neighbor edge values and vice versa
         applyEdgeCache(elevationData, gridSize, zoom, tileX, tileY, cacheMap);
 
         return elevationData;
@@ -100,8 +112,8 @@ public class PostGISElevationProvider implements ElevationProvider {
         for (int y = 0; y < gridSize; y++) {
             for (int x = 0; x < gridSize; x++) {
                 int idx = (y * gridSize + x) * 2;
-                srcPts[idx] = minY + cellSizeY * y;     // latitude
-                srcPts[idx + 1] = minX + cellSizeX * x; // longitude
+                srcPts[idx] = minY + cellSizeY * y;
+                srcPts[idx + 1] = minX + cellSizeX * x;
             }
         }
 
@@ -109,12 +121,10 @@ public class PostGISElevationProvider implements ElevationProvider {
         double[] utmPts = new double[numPts * 2];
         WGS84_TO_UTM32.transform(srcPts, 0, utmPts, 0, numPts);
 
-        // Get world-to-pixel transform from coverage
+        // World-to-pixel transform
         GridGeometry2D gridGeometry = coverage.getGridGeometry();
-        MathTransform gridToCRS = gridGeometry.getGridToCRS2D();
-        MathTransform crsToGrid = gridToCRS.inverse();
+        MathTransform crsToGrid = gridGeometry.getGridToCRS2D().inverse();
 
-        // Batch transform UTM coords to pixel coords
         double[] pixelPts = new double[numPts * 2];
         crsToGrid.transform(utmPts, 0, pixelPts, 0, numPts);
 
@@ -135,8 +145,6 @@ public class PostGISElevationProvider implements ElevationProvider {
                         && py >= rasterMinY && py < rasterMinY + rasterH) {
                     double elev = raster.getSampleDouble(px, py, 0);
                     elevationData[x][y] = elev > 0 ? elev : 0;
-                } else {
-                    elevationData[x][y] = 0;
                 }
             }
         }
@@ -145,117 +153,59 @@ public class PostGISElevationProvider implements ElevationProvider {
     private static void applyEdgeCache(double[][] elevationData, int gridSize,
                                          int zoom, int tileX, int tileY,
                                          Map<String, double[]> cacheMap) {
-        // Use putIfAbsent for thread-safe edge caching.
-        // Whichever tile reaches the shared edge key first stores its values;
-        // the adjacent tile then adopts those values, ensuring both tiles
-        // have identical elevations on their shared edge.
-
-        // Left edge
-        String keyLeft = zoom + "_" + (tileX - 1) + "_" + tileY + "_" + tileX + "_" + tileY;
-        double[] leftElevation = new double[gridSize];
-        for (int y = 0; y < gridSize; y++) {
-            leftElevation[y] = elevationData[0][y];
-        }
-        double[] existingLeft = cacheMap.putIfAbsent(keyLeft, leftElevation);
-        if (existingLeft != null) {
-            for (int y = 0; y < gridSize; y++) {
-                elevationData[0][y] = existingLeft[y];
-            }
-        }
-
-        // Right edge
-        String keyRight = zoom + "_" + tileX + "_" + tileY + "_" + (tileX + 1) + "_" + tileY;
-        double[] rightElevation = new double[gridSize];
-        for (int y = 0; y < gridSize; y++) {
-            rightElevation[y] = elevationData[gridSize - 1][y];
-        }
-        double[] existingRight = cacheMap.putIfAbsent(keyRight, rightElevation);
-        if (existingRight != null) {
-            for (int y = 0; y < gridSize; y++) {
-                elevationData[gridSize - 1][y] = existingRight[y];
-            }
-        }
-
-        // Bottom edge
-        String keyBottom = zoom + "_" + tileX + "_" + (tileY - 1) + "_" + tileX + "_" + tileY;
-        double[] bottomElevation = new double[gridSize];
-        for (int x = 0; x < gridSize; x++) {
-            bottomElevation[x] = elevationData[x][0];
-        }
-        double[] existingBottom = cacheMap.putIfAbsent(keyBottom, bottomElevation);
-        if (existingBottom != null) {
-            for (int x = 0; x < gridSize; x++) {
-                elevationData[x][0] = existingBottom[x];
-            }
-        }
-
-        // Top edge
-        String keyTop = zoom + "_" + tileX + "_" + tileY + "_" + tileX + "_" + (tileY + 1);
-        double[] topElevation = new double[gridSize];
-        for (int x = 0; x < gridSize; x++) {
-            topElevation[x] = elevationData[x][gridSize - 1];
-        }
-        double[] existingTop = cacheMap.putIfAbsent(keyTop, topElevation);
-        if (existingTop != null) {
-            for (int x = 0; x < gridSize; x++) {
-                elevationData[x][gridSize - 1] = existingTop[x];
-            }
-        }
-
-        // Corner reconciliation: edges applied above may have left stale corner
-        // values in the cache. Use separate corner keys so all tiles meeting at
-        // a corner agree on the final elevation value.
         int gs = gridSize - 1;
 
-        // Bottom-left corner (0,0)
-        String cBL = "c_" + zoom + "_" + tileX + "_" + tileY;
-        double[] blVal = {elevationData[0][0]};
-        double[] exBL = cacheMap.putIfAbsent(cBL, blVal);
-        if (exBL != null) elevationData[0][0] = exBL[0];
+        // Shared edges — whichever tile reaches the key first stores its values;
+        // the adjacent tile then adopts them for seamless boundaries.
+        cacheEdge(elevationData, gridSize, cacheMap,
+                zoom + "_" + (tileX - 1) + "_" + tileY + "_" + tileX + "_" + tileY,
+                i -> 0, i -> i);
+        cacheEdge(elevationData, gridSize, cacheMap,
+                zoom + "_" + tileX + "_" + tileY + "_" + (tileX + 1) + "_" + tileY,
+                i -> gs, i -> i);
+        cacheEdge(elevationData, gridSize, cacheMap,
+                zoom + "_" + tileX + "_" + (tileY - 1) + "_" + tileX + "_" + tileY,
+                i -> i, i -> 0);
+        cacheEdge(elevationData, gridSize, cacheMap,
+                zoom + "_" + tileX + "_" + tileY + "_" + tileX + "_" + (tileY + 1),
+                i -> i, i -> gs);
 
-        // Bottom-right corner (gs,0)
-        String cBR = "c_" + zoom + "_" + (tileX + 1) + "_" + tileY;
-        double[] brVal = {elevationData[gs][0]};
-        double[] exBR = cacheMap.putIfAbsent(cBR, brVal);
-        if (exBR != null) elevationData[gs][0] = exBR[0];
+        // Corner reconciliation: use separate corner keys so all tiles
+        // meeting at a corner agree on the same elevation value.
+        cacheCorner(elevationData, cacheMap, "c_" + zoom + "_" + tileX + "_" + tileY, 0, 0);
+        cacheCorner(elevationData, cacheMap, "c_" + zoom + "_" + (tileX + 1) + "_" + tileY, gs, 0);
+        cacheCorner(elevationData, cacheMap, "c_" + zoom + "_" + tileX + "_" + (tileY + 1), 0, gs);
+        cacheCorner(elevationData, cacheMap, "c_" + zoom + "_" + (tileX + 1) + "_" + (tileY + 1), gs, gs);
+    }
 
-        // Top-left corner (0,gs)
-        String cTL = "c_" + zoom + "_" + tileX + "_" + (tileY + 1);
-        double[] tlVal = {elevationData[0][gs]};
-        double[] exTL = cacheMap.putIfAbsent(cTL, tlVal);
-        if (exTL != null) elevationData[0][gs] = exTL[0];
+    private static void cacheEdge(double[][] data, int gridSize, Map<String, double[]> cache,
+                                    String key, IntUnaryOperator xIdx, IntUnaryOperator yIdx) {
+        double[] values = new double[gridSize];
+        for (int i = 0; i < gridSize; i++) {
+            values[i] = data[xIdx.applyAsInt(i)][yIdx.applyAsInt(i)];
+        }
+        double[] existing = cache.putIfAbsent(key, values);
+        if (existing != null) {
+            for (int i = 0; i < gridSize; i++) {
+                data[xIdx.applyAsInt(i)][yIdx.applyAsInt(i)] = existing[i];
+            }
+        }
+    }
 
-        // Top-right corner (gs,gs)
-        String cTR = "c_" + zoom + "_" + (tileX + 1) + "_" + (tileY + 1);
-        double[] trVal = {elevationData[gs][gs]};
-        double[] exTR = cacheMap.putIfAbsent(cTR, trVal);
-        if (exTR != null) elevationData[gs][gs] = exTR[0];
+    private static void cacheCorner(double[][] data, Map<String, double[]> cache,
+                                     String key, int x, int y) {
+        double[] val = {data[x][y]};
+        double[] existing = cache.putIfAbsent(key, val);
+        if (existing != null) {
+            data[x][y] = existing[0];
+        }
     }
 
     private GridCoverage2D getGeoTiffFromDB(double minLon, double minLat, double maxLon, double maxLat,
                                              int columns, int rows) {
-        GridCoverage2D coverage = null;
-        byte[] rasterData;
-
-        String query = "WITH bbox AS (\n" +
-                "    SELECT ST_MakeEnvelope(?, ?, ?, ?, 25832) AS geom\n" +
-                ")\n" +
-                "SELECT ST_AsGDALRaster(ST_Union(ST_Resample(\n" +
-                "           r.rast,\n" +
-                "           ST_MakeEmptyRaster(\n" +
-                "               ?, ?,\n" +
-                "               ?, ?,\n" +
-                "               ?, ?,\n" +
-                "               0, 0,\n" +
-                "               25832\n" +
-                "           )\n" +
-                "       , 'Avg'), 'MAX'), 'GTiff') AS resampled_raster\n" +
-                "FROM raster_table r, bbox b\n" +
-                "WHERE ST_Intersects(r.rast, b.geom)";
-
         try (
                 Connection conn = dataSource.getConnection();
-                PreparedStatement ps = conn.prepareStatement(query)
+                PreparedStatement ps = conn.prepareStatement(RASTER_QUERY)
         ) {
             ReferencedEnvelope bboxWGS84 = new ReferencedEnvelope(minLat, maxLat, minLon, maxLon, CRS_WGS84);
             ReferencedEnvelope bboxUTM32 = bboxWGS84.transform(CRS_UTM32, true);
@@ -284,17 +234,15 @@ public class PostGISElevationProvider implements ElevationProvider {
 
             ResultSet rs = ps.executeQuery();
             if (rs.next()) {
-                rasterData = rs.getBytes(1);
+                byte[] rasterData = rs.getBytes(1);
                 GeoTiffReader reader = new GeoTiffReader(new ByteArrayInputStream(rasterData));
-                coverage = reader.read(null);
-            } else {
-                System.out.println("No raster found for the specified ID.");
+                return reader.read(null);
             }
         } catch (Throwable e) {
             // silently skip tiles with no raster data
         }
 
-        return coverage;
+        return null;
     }
 
     static double[][] smoothGrid(double[][] grid) {
