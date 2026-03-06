@@ -16,10 +16,13 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.TreeSet;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
 public class XYZToGeoTIFF {
+
+    private static final String CRS_CODE = "EPSG:25832";
 
     record XYZPoint(double x, double y, double z) {}
 
@@ -85,13 +88,17 @@ public class XYZToGeoTIFF {
     }
 
     private static void createGeoTIFF(List<XYZPoint> points, String outputFilePath) throws Exception {
-        double minX = points.stream().mapToDouble(XYZPoint::x).min().orElseThrow();
-        double maxX = points.stream().mapToDouble(XYZPoint::x).max().orElseThrow();
-        double minY = points.stream().mapToDouble(XYZPoint::y).min().orElseThrow();
-        double maxY = points.stream().mapToDouble(XYZPoint::y).max().orElseThrow();
+        TreeSet<Double> uniqueX = new TreeSet<>();
+        TreeSet<Double> uniqueY = new TreeSet<>();
+        for (XYZPoint p : points) {
+            uniqueX.add(p.x);
+            uniqueY.add(p.y);
+        }
 
-        int width = 200;
-        int height = 200;
+        int width = uniqueX.size();
+        int height = uniqueY.size();
+        double minX = uniqueX.first(), maxX = uniqueX.last();
+        double minY = uniqueY.first(), maxY = uniqueY.last();
         double cellSizeX = (maxX - minX) / (width - 1);
         double cellSizeY = (maxY - minY) / (height - 1);
 
@@ -106,8 +113,11 @@ public class XYZToGeoTIFF {
             }
         }
 
-        CoordinateReferenceSystem crs = CRS.decode("EPSG:25832");
-        ReferencedEnvelope envelope = new ReferencedEnvelope(minX - 2.5, maxX + 2.5, minY - 2.5, maxY + 2.5, crs);
+        CoordinateReferenceSystem crs = CRS.decode(CRS_CODE);
+        double halfCellX = cellSizeX / 2;
+        double halfCellY = cellSizeY / 2;
+        ReferencedEnvelope envelope = new ReferencedEnvelope(
+                minX - halfCellX, maxX + halfCellX, minY - halfCellY, maxY + halfCellY, crs);
         GridCoverageFactory factory = new GridCoverageFactory();
         GridCoverage2D coverage = factory.create("Terrain", raster, envelope);
 
