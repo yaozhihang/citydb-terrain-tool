@@ -1,4 +1,4 @@
-package org.citydb.terrain.io;
+package org.citydb.terrain.tile;
 
 import org.citydb.terrain.mesh.MeshResult;
 import org.citydb.terrain.mesh.MeshStrategy;

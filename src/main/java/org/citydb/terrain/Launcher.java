@@ -1,16 +1,93 @@
 package org.citydb.terrain;
 
 import org.apache.commons.cli.*;
-import org.citydb.terrain.io.TerrainGenerator;
+import org.citydb.terrain.operation.QMSGenerator;
 import org.citydb.terrain.mesh.*;
-import org.citydb.terrain.provider.ElevationProvider;
-import org.citydb.terrain.provider.PointCloudElevationProvider;
+import org.citydb.terrain.operation.TerrainImporter;
 import org.citydb.terrain.provider.PostGISElevationProvider;
 
 public class Launcher {
 
     public static void main(String[] args) {
-        Options options = new Options();
+        if (args.length == 0 || args[0].equals("-h") || args[0].equals("--help")) {
+            printUsage();
+            return;
+        }
+
+        String command = args[0];
+        String[] remainingArgs = new String[args.length - 1];
+        System.arraycopy(args, 1, remainingArgs, 0, remainingArgs.length);
+
+        switch (command.toLowerCase()) {
+            case "import" -> runImport(remainingArgs);
+            case "generate" -> runGenerate(remainingArgs);
+            default -> {
+                System.err.println("Unknown command: " + command);
+                printUsage();
+                System.exit(1);
+            }
+        }
+    }
+
+    private static void printUsage() {
+        System.out.println("Usage: terrain-tool <command> [options]");
+        System.out.println();
+        System.out.println("Commands:");
+        System.out.println("  import    Import XYZ terrain data (ZIP files) into database");
+        System.out.println("  generate  Generate quantized mesh terrain tiles from database");
+        System.out.println();
+        System.out.println("Use 'terrain-tool <command> --help' for command-specific options.");
+    }
+
+    private static void runImport(String[] args) {
+        Options options = createDbOptions();
+
+        options.addOption(Option.builder("i")
+                .longOpt("input")
+                .hasArg()
+                .required()
+                .desc("Input folder containing XYZ ZIP files")
+                .build());
+
+        options.addOption(Option.builder("h")
+                .longOpt("help")
+                .desc("Print this help message")
+                .build());
+
+        CommandLineParser parser = new DefaultParser();
+        HelpFormatter formatter = new HelpFormatter();
+
+        try {
+            CommandLine cmd = parser.parse(options, args);
+
+            if (cmd.hasOption("help")) {
+                formatter.printHelp("terrain-tool import [options]", options);
+                return;
+            }
+
+            String dbUrl = buildDbUrl(cmd);
+            String dbUser = cmd.getOptionValue("user");
+            String dbPassword = cmd.getOptionValue("password");
+            String schema = cmd.getOptionValue("schema", "public");
+            String tableName = cmd.getOptionValue("table");
+            String qualifiedTable = schema + "." + tableName;
+            String inputFolder = cmd.getOptionValue("input");
+
+            TerrainImporter.execute(inputFolder, dbUrl, dbUser, dbPassword, qualifiedTable);
+
+        } catch (ParseException e) {
+            System.err.println("Error parsing arguments: " + e.getMessage());
+            formatter.printHelp("terrain-tool import [options]", options);
+            System.exit(1);
+        } catch (Exception e) {
+            System.err.println("Error during import: " + e.getMessage());
+            e.printStackTrace();
+            System.exit(1);
+        }
+    }
+
+    private static void runGenerate(String[] args) {
+        Options options = createDbOptions();
 
         options.addOption(Option.builder()
                 .longOpt("minX")
@@ -73,36 +150,6 @@ public class Launcher {
                 .desc("Mesh strategy: delaunay, rtin, simple (default: delaunay)")
                 .build());
 
-        options.addOption(Option.builder("p")
-                .longOpt("provider")
-                .hasArg()
-                .desc("Elevation provider: raster, pointcloud (default: raster)")
-                .build());
-
-        options.addOption(Option.builder("d")
-                .longOpt("db")
-                .hasArg()
-                .desc("JDBC database URL (default: jdbc:postgresql://localhost:5432/bayern_dem_raster)")
-                .build());
-
-        options.addOption(Option.builder("u")
-                .longOpt("user")
-                .hasArg()
-                .desc("Database username (default: postgres)")
-                .build());
-
-        options.addOption(Option.builder()
-                .longOpt("password")
-                .hasArg()
-                .desc("Database password (default: 125125)")
-                .build());
-
-        options.addOption(Option.builder("t")
-                .longOpt("table")
-                .hasArg()
-                .desc("Database table name (default: raster_table or point_cloud)")
-                .build());
-
         options.addOption(Option.builder("h")
                 .longOpt("help")
                 .desc("Print this help message")
@@ -115,7 +162,7 @@ public class Launcher {
             CommandLine cmd = parser.parse(options, args);
 
             if (cmd.hasOption("help")) {
-                formatter.printHelp("terrain-tile", options);
+                formatter.printHelp("terrain-tool generate [options]", options);
                 return;
             }
 
@@ -129,16 +176,16 @@ public class Launcher {
             String outputFolder = cmd.getOptionValue("output", "viewer/terrain/");
             MeshStrategy meshStrategy = createMeshStrategy(cmd.getOptionValue("mesh", "delaunay"));
 
-            String dbUrl = cmd.getOptionValue("db", "jdbc:postgresql://localhost:5432/bayern_dem_raster");
-            String dbUser = cmd.getOptionValue("user", "postgres");
-            String dbPassword = cmd.getOptionValue("password", "125125");
-            String providerType = cmd.getOptionValue("provider", "raster");
-            String tableName = cmd.getOptionValue("table",
-                    providerType.equalsIgnoreCase("pointcloud") ? "point_cloud" : "raster_table");
+            String dbUrl = buildDbUrl(cmd);
+            String dbUser = cmd.getOptionValue("user");
+            String dbPassword = cmd.getOptionValue("password");
+            String schema = cmd.getOptionValue("schema", "public");
+            String tableName = cmd.getOptionValue("table");
+            String qualifiedTable = schema + "." + tableName;
 
-            ElevationProvider elevationProvider = createElevationProvider(providerType, dbUrl, dbUser, dbPassword, tableName);
+            var elevationProvider = new PostGISElevationProvider(dbUrl, dbUser, dbPassword, qualifiedTable);
 
-            TerrainGenerator generator = new TerrainGenerator(
+            QMSGenerator generator = new QMSGenerator(
                     minX, maxX, minY, maxY,
                     gridSize, zoomLevel, baseError,
                     outputFolder, meshStrategy, elevationProvider);
@@ -147,24 +194,74 @@ public class Launcher {
 
         } catch (ParseException e) {
             System.err.println("Error parsing arguments: " + e.getMessage());
-            formatter.printHelp("terrain-tile", options);
+            formatter.printHelp("terrain-tool generate [options]", options);
             System.exit(1);
         } catch (Exception e) {
-            System.err.println("Error during tile generation: " + e.getMessage());
+            System.err.println("Error during generation: " + e.getMessage());
             e.printStackTrace();
             System.exit(1);
         }
     }
 
-    private static ElevationProvider createElevationProvider(String type, String url, String user, String password, String table) {
-        return switch (type.toLowerCase()) {
-            case "raster" -> new PostGISElevationProvider(url, user, password, table);
-            case "pointcloud" -> new PointCloudElevationProvider(url, user, password, table);
-            default -> {
-                System.err.println("Unknown provider: " + type + ". Using raster.");
-                yield new PostGISElevationProvider(url, user, password, table);
-            }
-        };
+    private static Options createDbOptions() {
+        Options options = new Options();
+
+        options.addOption(Option.builder("H")
+                .longOpt("host")
+                .hasArg()
+                .required()
+                .desc("Database host")
+                .build());
+
+        options.addOption(Option.builder("P")
+                .longOpt("port")
+                .hasArg()
+                .type(Number.class)
+                .desc("Database port (default: 5432)")
+                .build());
+
+        options.addOption(Option.builder("d")
+                .longOpt("db")
+                .hasArg()
+                .required()
+                .desc("Database name")
+                .build());
+
+        options.addOption(Option.builder("u")
+                .longOpt("user")
+                .hasArg()
+                .required()
+                .desc("Database username")
+                .build());
+
+        options.addOption(Option.builder()
+                .longOpt("password")
+                .hasArg()
+                .required()
+                .desc("Database password")
+                .build());
+
+        options.addOption(Option.builder("s")
+                .longOpt("schema")
+                .hasArg()
+                .desc("Database schema (default: public)")
+                .build());
+
+        options.addOption(Option.builder("t")
+                .longOpt("table")
+                .hasArg()
+                .required()
+                .desc("Database table name")
+                .build());
+
+        return options;
+    }
+
+    private static String buildDbUrl(CommandLine cmd) throws ParseException {
+        String host = cmd.getOptionValue("host");
+        int port = parseInt(cmd, "port", 5432);
+        String dbName = cmd.getOptionValue("db");
+        return "jdbc:postgresql://" + host + ":" + port + "/" + dbName;
     }
 
     private static MeshStrategy createMeshStrategy(String type) {

@@ -15,7 +15,7 @@ org.citydb.terrain.mesh
 ├── DelaunayMesh                – Delaunay adaptive mesh generator
 └── SimpleGridMesh              – Regular-grid mesh (no simplification)
 
-org.citydb.terrain.io
+org.citydb.terrain.tile
 ├── TerrainGenerator            – Orchestrates multi-zoom tile generation
 ├── TerrainTileCreator          – Per-tile pipeline (elevation → mesh → binary)
 └── TerrainTileWriter           – Encodes mesh into Cesium .terrain format

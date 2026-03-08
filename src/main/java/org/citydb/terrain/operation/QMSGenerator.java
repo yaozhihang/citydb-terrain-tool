@@ -1,9 +1,10 @@
-package org.citydb.terrain.io;
+package org.citydb.terrain.operation;
 
 import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONArray;
 import com.alibaba.fastjson2.JSONObject;
 import com.alibaba.fastjson2.JSONWriter;
+import org.citydb.terrain.tile.TerrainTileCreator;
 import org.citydb.terrain.mesh.MeshStrategy;
 import org.citydb.terrain.provider.ElevationProvider;
 import org.citydb.terrain.util.CoordinateUtils;
@@ -17,7 +18,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 
-public class TerrainGenerator {
+public class QMSGenerator {
 
     private final double minX, maxX, minY, maxY;
     private final int gridSize;
@@ -27,10 +28,10 @@ public class TerrainGenerator {
     private final MeshStrategy meshStrategy;
     private final ElevationProvider elevationProvider;
 
-    public TerrainGenerator(double minX, double maxX, double minY, double maxY,
-                            int gridSize, int zoomLevel, float baseError,
-                            String outputFolder, MeshStrategy meshStrategy,
-                            ElevationProvider elevationProvider) {
+    public QMSGenerator(double minX, double maxX, double minY, double maxY,
+                        int gridSize, int zoomLevel, float baseError,
+                        String outputFolder, MeshStrategy meshStrategy,
+                        ElevationProvider elevationProvider) {
         this.minX = minX;
         this.maxX = maxX;
         this.minY = minY;
