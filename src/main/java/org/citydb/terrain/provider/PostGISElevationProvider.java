@@ -92,7 +92,7 @@ public class PostGISElevationProvider implements ElevationProvider {
     public double[] queryExtent() throws Exception {
         String sql = """
                 SELECT ST_XMin(ext), ST_XMax(ext), ST_YMin(ext), ST_YMax(ext)
-                FROM (SELECT ST_Extent(ST_Transform(ST_ConvexHull(rast), 4326)) AS ext FROM %s) t"""
+                FROM (SELECT ST_Extent(ST_Transform(ST_Envelope(rast), 4326)) AS ext FROM %s) t"""
                 .formatted(tableName);
         try (Connection conn = dataSource.getConnection();
              Statement stmt = conn.createStatement();

@@ -45,6 +45,7 @@ public class TerrainImporter {
 
         try (Connection conn = dataSource.getConnection()) {
             System.out.println("Connected to the database!");
+            checkRequiredExtensions(conn);
             ensureTableExists(conn, tableName);
         }
 
@@ -56,11 +57,11 @@ public class TerrainImporter {
 
         File[] files = folder.listFiles((dir, name) -> {
             String lower = name.toLowerCase();
-            return lower.endsWith(".zip") || lower.endsWith(".xyz");
+            return lower.endsWith(".zip") || lower.endsWith(".xyz") || lower.endsWith(".txt");
         });
         if (files == null || files.length == 0) {
             dataSource.close();
-            System.out.println("No ZIP or XYZ files found in the folder.");
+            System.out.println("No ZIP, XYZ, or TXT files found in the folder.");
             return;
         }
 
@@ -101,6 +102,10 @@ public class TerrainImporter {
             }
         }
 
+        try (Connection conn = dataSource.getConnection()) {
+            ensureSpatialIndex(conn, tableName);
+        }
+
         dataSource.close();
 
         Duration elapsed = Duration.between(start, Instant.now());
@@ -117,6 +122,30 @@ public class TerrainImporter {
         ds.setInitialSize(2);
         ds.setMaxActive(Runtime.getRuntime().availableProcessors());
         return ds;
+    }
+
+    private static void checkRequiredExtensions(Connection conn) throws SQLException {
+        String sql = "SELECT extname FROM pg_extension WHERE extname IN ('postgis', 'postgis_raster')";
+        List<String> installed = new ArrayList<>();
+        try (Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
+            while (rs.next()) {
+                installed.add(rs.getString(1));
+            }
+        }
+
+        List<String> missing = new ArrayList<>();
+        if (!installed.contains("postgis")) missing.add("postgis");
+        if (!installed.contains("postgis_raster")) missing.add("postgis_raster");
+
+        if (!missing.isEmpty()) {
+            throw new SQLException("Required PostgreSQL extension(s) not installed: " + String.join(", ", missing)
+                    + ". Please run: " + missing.stream()
+                    .map(ext -> "CREATE EXTENSION " + ext + ";")
+                    .reduce((a, b) -> a + " " + b).orElse(""));
+        }
+
+        System.out.println("Required extensions verified: postgis, postgis_raster");
     }
 
     private static void ensureTableExists(Connection conn, String tableName) throws SQLException {
@@ -142,6 +171,33 @@ public class TerrainImporter {
         }
     }
 
+    private static void ensureSpatialIndex(Connection conn, String tableName) throws SQLException {
+        String table = tableName;
+        if (tableName.contains(".")) {
+            table = tableName.split("\\.", 2)[1];
+        }
+
+        String indexName = table + "_rast_idx";
+        String checkSql = "SELECT 1 FROM pg_indexes WHERE indexname = ?";
+        try (PreparedStatement ps = conn.prepareStatement(checkSql)) {
+            ps.setString(1, indexName);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    System.out.println("Spatial index '" + indexName + "' already exists.");
+                    return;
+                }
+            }
+        }
+
+        String createSql = "CREATE INDEX " + indexName + " ON " + tableName
+                + " USING GIST (ST_Envelope(rast))";
+        System.out.println("Creating spatial index '" + indexName + "'...");
+        try (Statement stmt = conn.createStatement()) {
+            stmt.execute(createSql);
+            System.out.println("Spatial index created.");
+        }
+    }
+
     private static void processXyzFile(Path xyzFilePath, DataSource dataSource,
                                         String tableName, AtomicInteger ridCounter) throws Exception {
         try (InputStream is = Files.newInputStream(xyzFilePath)) {
@@ -164,7 +220,8 @@ public class TerrainImporter {
         try (ZipInputStream zis = new ZipInputStream(Files.newInputStream(zipFilePath))) {
             ZipEntry entry;
             while ((entry = zis.getNextEntry()) != null) {
-                if (entry.isDirectory() || !entry.getName().toLowerCase().endsWith(".xyz")) {
+                String entryName = entry.getName().toLowerCase();
+                if (entry.isDirectory() || !(entryName.endsWith(".xyz") || entryName.endsWith(".txt"))) {
                     zis.closeEntry();
                     continue;
                 }
