@@ -1,5 +1,6 @@
 package org.citydb.terrain.operation;
 
+import org.apache.tomcat.jdbc.pool.DataSource;
 import org.geotools.api.referencing.crs.CoordinateReferenceSystem;
 import org.geotools.coverage.grid.GridCoverage2D;
 import org.geotools.coverage.grid.GridCoverageFactory;
@@ -15,15 +16,20 @@ import java.io.*;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.*;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.TreeSet;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
 /**
- * Reads ZIP files containing terrain XYZ data, converts to raster,
- * and imports directly into a PostGIS database.
+ * Reads ZIP/XYZ files containing terrain XYZ data, converts to raster,
+ * and imports directly into a PostGIS database using multi-threading.
  */
 public class TerrainImporter {
 
@@ -33,36 +39,97 @@ public class TerrainImporter {
 
     public static void execute(String folderPath, String dbUrl, String dbUser,
                                 String dbPassword, String tableName) throws Exception {
-        try (Connection conn = DriverManager.getConnection(dbUrl, dbUser, dbPassword)) {
+        Instant start = Instant.now();
+
+        DataSource dataSource = createDataSource(dbUrl, dbUser, dbPassword);
+
+        try (Connection conn = dataSource.getConnection()) {
             System.out.println("Connected to the database!");
-
             ensureTableExists(conn, tableName);
-
-            File folder = new File(folderPath);
-            if (!folder.exists() || !folder.isDirectory()) {
-                throw new IllegalArgumentException("Folder does not exist or is not a directory: " + folderPath);
-            }
-
-            File[] files = folder.listFiles((dir, name) -> name.toLowerCase().endsWith(".zip"));
-            if (files == null || files.length == 0) {
-                System.out.println("No ZIP files found in the folder.");
-                return;
-            }
-
-            int rid = 0;
-            int remaining = files.length;
-            for (File zipFile : files) {
-                System.out.println(remaining-- + " Processing ZIP file: " + zipFile.getName());
-                rid = processZipFile(zipFile.toPath(), conn, tableName, rid);
-            }
-
-            System.out.println("All files imported. Total rasters: " + rid);
         }
+
+        File folder = new File(folderPath);
+        if (!folder.exists() || !folder.isDirectory()) {
+            dataSource.close();
+            throw new IllegalArgumentException("Folder does not exist or is not a directory: " + folderPath);
+        }
+
+        File[] files = folder.listFiles((dir, name) -> {
+            String lower = name.toLowerCase();
+            return lower.endsWith(".zip") || lower.endsWith(".xyz");
+        });
+        if (files == null || files.length == 0) {
+            dataSource.close();
+            System.out.println("No ZIP or XYZ files found in the folder.");
+            return;
+        }
+
+        int total = files.length;
+        System.out.println("Found " + total + " file(s) to import.");
+
+        AtomicInteger ridCounter = new AtomicInteger(0);
+        AtomicInteger completed = new AtomicInteger(0);
+
+        int threads = Runtime.getRuntime().availableProcessors();
+        ExecutorService executor = Executors.newFixedThreadPool(threads);
+        System.out.println("Using " + threads + " threads.");
+
+        for (File file : files) {
+            executor.submit(() -> {
+                try {
+                    if (file.getName().toLowerCase().endsWith(".zip")) {
+                        processZipFile(file.toPath(), dataSource, tableName, ridCounter);
+                    } else {
+                        processXyzFile(file.toPath(), dataSource, tableName, ridCounter);
+                    }
+                    int done = completed.incrementAndGet();
+                    System.out.printf("[%d/%d] Completed: %s%n", done, total, file.getName());
+                } catch (Exception e) {
+                    System.err.println("Error processing: " + file.getName());
+                    e.printStackTrace();
+                }
+            });
+        }
+
+        executor.shutdown();
+        while (!executor.isTerminated()) {
+            try {
+                Thread.sleep(1000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                System.err.println("Thread interrupted while waiting for tasks to complete.");
+            }
+        }
+
+        dataSource.close();
+
+        Duration elapsed = Duration.between(start, Instant.now());
+        System.out.println("All files imported. Total rasters: " + ridCounter.get());
+        System.out.println("Total execution time: " + formatElapsedTime(elapsed));
+    }
+
+    private static DataSource createDataSource(String url, String user, String password) {
+        DataSource ds = new DataSource();
+        ds.setUrl(url);
+        ds.setUsername(user);
+        ds.setPassword(password);
+        ds.setDriverClassName("org.postgresql.Driver");
+        ds.setInitialSize(2);
+        ds.setMaxActive(Runtime.getRuntime().availableProcessors());
+        return ds;
     }
 
     private static void ensureTableExists(Connection conn, String tableName) throws SQLException {
+        String schema = null;
+        String table = tableName;
+        if (tableName.contains(".")) {
+            String[] parts = tableName.split("\\.", 2);
+            schema = parts[0];
+            table = parts[1];
+        }
+
         DatabaseMetaData meta = conn.getMetaData();
-        try (ResultSet rs = meta.getTables(null, null, tableName, new String[]{"TABLE"})) {
+        try (ResultSet rs = meta.getTables(null, schema, table, new String[]{"TABLE"})) {
             if (rs.next()) {
                 System.out.println("Table '" + tableName + "' already exists.");
                 return;
@@ -75,34 +142,47 @@ public class TerrainImporter {
         }
     }
 
-    private static int processZipFile(Path zipFilePath, Connection conn, String tableName, int rid) {
+    private static void processXyzFile(Path xyzFilePath, DataSource dataSource,
+                                        String tableName, AtomicInteger ridCounter) throws Exception {
+        try (InputStream is = Files.newInputStream(xyzFilePath)) {
+            List<XYZPoint> points = readXYZPoints(is);
+            if (points.isEmpty()) {
+                System.out.println("  Skipping empty file: " + xyzFilePath.getFileName());
+                return;
+            }
+
+            byte[] geotiffBytes = createGeoTIFFBytes(points);
+            int rid = ridCounter.getAndIncrement();
+            try (Connection conn = dataSource.getConnection()) {
+                importRaster(rid, geotiffBytes, conn, tableName);
+            }
+        }
+    }
+
+    private static void processZipFile(Path zipFilePath, DataSource dataSource,
+                                        String tableName, AtomicInteger ridCounter) throws Exception {
         try (ZipInputStream zis = new ZipInputStream(Files.newInputStream(zipFilePath))) {
             ZipEntry entry;
             while ((entry = zis.getNextEntry()) != null) {
-                if (entry.isDirectory()) {
+                if (entry.isDirectory() || !entry.getName().toLowerCase().endsWith(".xyz")) {
                     zis.closeEntry();
                     continue;
                 }
 
                 List<XYZPoint> points = readXYZPoints(zis);
                 if (points.isEmpty()) {
-                    System.out.println("  Skipping empty entry: " + entry.getName());
                     zis.closeEntry();
                     continue;
                 }
 
                 byte[] geotiffBytes = createGeoTIFFBytes(points);
-                importRaster(rid, geotiffBytes, conn, tableName);
-                System.out.println("  Imported " + entry.getName()
-                        + " (" + points.size() + " points, rid=" + rid + ")");
-                rid++;
+                int rid = ridCounter.getAndIncrement();
+                try (Connection conn = dataSource.getConnection()) {
+                    importRaster(rid, geotiffBytes, conn, tableName);
+                }
                 zis.closeEntry();
             }
-        } catch (Exception e) {
-            System.err.println("Error processing ZIP file: " + zipFilePath.getFileName());
-            e.printStackTrace();
         }
-        return rid;
     }
 
     private static List<XYZPoint> readXYZPoints(InputStream is) throws IOException {
@@ -112,11 +192,15 @@ public class TerrainImporter {
         while ((line = reader.readLine()) != null) {
             String[] values = line.split("\\s+");
             if (values.length >= 3) {
-                double x = Double.parseDouble(values[0]);
-                double y = Double.parseDouble(values[1]);
-                double z = Double.parseDouble(values[2]);
-                if (z > 0) {
-                    points.add(new XYZPoint(x, y, z));
+                try {
+                    double x = Double.parseDouble(values[0]);
+                    double y = Double.parseDouble(values[1]);
+                    double z = Double.parseDouble(values[2]);
+                    if (z > 0) {
+                        points.add(new XYZPoint(x, y, z));
+                    }
+                } catch (NumberFormatException ignored) {
+                    // skip non-numeric lines (headers, metadata, etc.)
                 }
             }
         }
@@ -156,7 +240,6 @@ public class TerrainImporter {
         GridCoverageFactory factory = new GridCoverageFactory();
         GridCoverage2D coverage = factory.create("Terrain", raster, envelope);
 
-        // Write GeoTIFF to a temp file, then read bytes
         Path tempFile = Files.createTempFile("xyz_raster_", ".tif");
         try {
             GeoTiffWriter writer = new GeoTiffWriter(tempFile.toFile());
@@ -177,6 +260,23 @@ public class TerrainImporter {
             stmt.setInt(1, rid);
             stmt.setBytes(2, geotiffBytes);
             stmt.executeUpdate();
+        }
+    }
+
+    private static String formatElapsedTime(Duration elapsed) {
+        long d = elapsed.toDaysPart();
+        long h = elapsed.toHoursPart();
+        long m = elapsed.toMinutesPart();
+        long s = elapsed.toSecondsPart();
+
+        if (d > 0) {
+            return String.format("%02d d, %02d h, %02d m, %02d s", d, h, m, s);
+        } else if (h > 0) {
+            return String.format("%02d h, %02d m, %02d s", h, m, s);
+        } else if (m > 0) {
+            return String.format("%02d m, %02d s", m, s);
+        } else {
+            return String.format("%02d s", s);
         }
     }
 }

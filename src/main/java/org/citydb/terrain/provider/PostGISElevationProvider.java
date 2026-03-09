@@ -84,6 +84,32 @@ public class PostGISElevationProvider implements ElevationProvider {
         }
     }
 
+    /**
+     * Queries the spatial extent of the raster table and returns it in WGS84.
+     *
+     * @return double array [minLon, maxLon, minLat, maxLat]
+     */
+    public double[] queryExtent() throws Exception {
+        String sql = """
+                SELECT ST_XMin(ext), ST_XMax(ext), ST_YMin(ext), ST_YMax(ext)
+                FROM (SELECT ST_Extent(ST_Transform(ST_ConvexHull(rast), 4326)) AS ext FROM %s) t"""
+                .formatted(tableName);
+        try (Connection conn = dataSource.getConnection();
+             Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
+            if (rs.next() && rs.getObject(1) != null) {
+                double[] extent = new double[]{
+                        rs.getDouble(1), rs.getDouble(2),
+                        rs.getDouble(3), rs.getDouble(4)
+                };
+                System.out.printf("Raster extent (WGS84): [%.5f, %.5f, %.5f, %.5f]%n",
+                        extent[0], extent[1], extent[2], extent[3]);
+                return extent;
+            }
+            throw new IllegalStateException(tableName + " is empty, cannot determine extent");
+        }
+    }
+
     @Override
     public void close() {
         dataSource.close();

@@ -93,28 +93,28 @@ public class Launcher {
                 .longOpt("minX")
                 .hasArg()
                 .type(Number.class)
-                .desc("West extent longitude (default: 8.97205)")
+                .desc("West extent longitude (default: from raster extent)")
                 .build());
 
         options.addOption(Option.builder()
                 .longOpt("maxX")
                 .hasArg()
                 .type(Number.class)
-                .desc("East extent longitude (default: 13.84636)")
+                .desc("East extent longitude (default: from raster extent)")
                 .build());
 
         options.addOption(Option.builder()
                 .longOpt("minY")
                 .hasArg()
                 .type(Number.class)
-                .desc("South extent latitude (default: 47.26887)")
+                .desc("South extent latitude (default: from raster extent)")
                 .build());
 
         options.addOption(Option.builder()
                 .longOpt("maxY")
                 .hasArg()
                 .type(Number.class)
-                .desc("North extent latitude (default: 50.56651)")
+                .desc("North extent latitude (default: from raster extent)")
                 .build());
 
         options.addOption(Option.builder()
@@ -166,16 +166,6 @@ public class Launcher {
                 return;
             }
 
-            double minX = parseDouble(cmd, "minX", 8.97205);
-            double maxX = parseDouble(cmd, "maxX", 13.84636);
-            double minY = parseDouble(cmd, "minY", 47.26887);
-            double maxY = parseDouble(cmd, "maxY", 50.56651);
-            int gridSize = parseInt(cmd, "gridSize", 33);
-            int zoomLevel = parseInt(cmd, "zoom", 10);
-            float baseError = (float) parseDouble(cmd, "error", 5.0);
-            String outputFolder = cmd.getOptionValue("output", "viewer/terrain/");
-            MeshStrategy meshStrategy = createMeshStrategy(cmd.getOptionValue("mesh", "delaunay"));
-
             String dbUrl = buildDbUrl(cmd);
             String dbUser = cmd.getOptionValue("user");
             String dbPassword = cmd.getOptionValue("password");
@@ -184,6 +174,19 @@ public class Launcher {
             String qualifiedTable = schema + "." + tableName;
 
             var elevationProvider = new PostGISElevationProvider(dbUrl, dbUser, dbPassword, qualifiedTable);
+
+            // Query extent from raster table as default
+            double[] extent = elevationProvider.queryExtent();
+            double minX = parseDouble(cmd, "minX", extent[0]);
+            double maxX = parseDouble(cmd, "maxX", extent[1]);
+            double minY = parseDouble(cmd, "minY", extent[2]);
+            double maxY = parseDouble(cmd, "maxY", extent[3]);
+
+            int gridSize = parseInt(cmd, "gridSize", 33);
+            int zoomLevel = parseInt(cmd, "zoom", 10);
+            float baseError = (float) parseDouble(cmd, "error", 5.0);
+            String outputFolder = cmd.getOptionValue("output", "viewer/terrain/");
+            MeshStrategy meshStrategy = createMeshStrategy(cmd.getOptionValue("mesh", "delaunay"));
 
             QMSGenerator generator = new QMSGenerator(
                     minX, maxX, minY, maxY,
