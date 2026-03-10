@@ -57,11 +57,12 @@ public class TerrainImporter {
 
         File[] files = folder.listFiles((dir, name) -> {
             String lower = name.toLowerCase();
-            return lower.endsWith(".zip") || lower.endsWith(".xyz") || lower.endsWith(".txt");
+            return lower.endsWith(".zip") || lower.endsWith(".xyz") || lower.endsWith(".txt")
+                    || lower.endsWith(".tif") || lower.endsWith(".tiff") || lower.endsWith(".geotiff");
         });
         if (files == null || files.length == 0) {
             dataSource.close();
-            System.out.println("No ZIP, XYZ, or TXT files found in the folder.");
+            System.out.println("No importable files found in the folder (ZIP, XYZ, TXT, TIF, GeoTIFF).");
             return;
         }
 
@@ -78,8 +79,11 @@ public class TerrainImporter {
         for (File file : files) {
             executor.submit(() -> {
                 try {
-                    if (file.getName().toLowerCase().endsWith(".zip")) {
+                    String lower = file.getName().toLowerCase();
+                    if (lower.endsWith(".zip")) {
                         processZipFile(file.toPath(), dataSource, tableName, ridCounter);
+                    } else if (lower.endsWith(".tif") || lower.endsWith(".tiff") || lower.endsWith(".geotiff")) {
+                        processGeoTiffFile(file.toPath(), dataSource, tableName, ridCounter);
                     } else {
                         processXyzFile(file.toPath(), dataSource, tableName, ridCounter);
                     }
@@ -198,6 +202,15 @@ public class TerrainImporter {
         }
     }
 
+    private static void processGeoTiffFile(Path tiffFilePath, DataSource dataSource,
+                                            String tableName, AtomicInteger ridCounter) throws Exception {
+        byte[] geotiffBytes = Files.readAllBytes(tiffFilePath);
+        int rid = ridCounter.getAndIncrement();
+        try (Connection conn = dataSource.getConnection()) {
+            importRaster(rid, geotiffBytes, conn, tableName);
+        }
+    }
+
     private static void processXyzFile(Path xyzFilePath, DataSource dataSource,
                                         String tableName, AtomicInteger ridCounter) throws Exception {
         try (InputStream is = Files.newInputStream(xyzFilePath)) {
@@ -221,21 +234,31 @@ public class TerrainImporter {
             ZipEntry entry;
             while ((entry = zis.getNextEntry()) != null) {
                 String entryName = entry.getName().toLowerCase();
-                if (entry.isDirectory() || !(entryName.endsWith(".xyz") || entryName.endsWith(".txt"))) {
+                if (entry.isDirectory()) {
                     zis.closeEntry();
                     continue;
                 }
 
-                List<XYZPoint> points = readXYZPoints(zis);
-                if (points.isEmpty()) {
+                if (entryName.endsWith(".tif") || entryName.endsWith(".tiff") || entryName.endsWith(".geotiff")) {
+                    byte[] geotiffBytes = zis.readAllBytes();
+                    int rid = ridCounter.getAndIncrement();
+                    try (Connection conn = dataSource.getConnection()) {
+                        importRaster(rid, geotiffBytes, conn, tableName);
+                    }
+                } else if (entryName.endsWith(".xyz") || entryName.endsWith(".txt")) {
+                    List<XYZPoint> points = readXYZPoints(zis);
+                    if (points.isEmpty()) {
+                        zis.closeEntry();
+                        continue;
+                    }
+                    byte[] geotiffBytes = createGeoTIFFBytes(points);
+                    int rid = ridCounter.getAndIncrement();
+                    try (Connection conn = dataSource.getConnection()) {
+                        importRaster(rid, geotiffBytes, conn, tableName);
+                    }
+                } else {
                     zis.closeEntry();
                     continue;
-                }
-
-                byte[] geotiffBytes = createGeoTIFFBytes(points);
-                int rid = ridCounter.getAndIncrement();
-                try (Connection conn = dataSource.getConnection()) {
-                    importRaster(rid, geotiffBytes, conn, tableName);
                 }
                 zis.closeEntry();
             }
