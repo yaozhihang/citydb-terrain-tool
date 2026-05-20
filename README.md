@@ -164,10 +164,42 @@ gradle run --args="--mesh simple --zoom 14 --error 2.0 --output output/terrain/"
 
 Requires Java 21+ and a PostGIS database with elevation data (raster or point cloud).
 
+### Development (Gradle)
+
 ```bash
-gradle run
-gradle run --args="--help"
+./gradlew run --args="--help"            # Linux/Mac
+gradlew.bat run --args="--help"          # Windows
 ```
+
+### Distribution build (recommended)
+
+```bash
+./gradlew installDist                    # Linux/Mac
+gradlew.bat installDist                  # Windows
+
+# Create a distributable zip / tar
+./gradlew distZip
+./gradlew distTar
+```
+
+The build produces a self-contained distribution under `build/install/citydb-terrain-tool/`:
+
+```
+citydb-terrain-tool/
+├── bin/         Start scripts (POSIX + .bat)
+└── lib/         All JARs (project + dependencies)
+```
+
+Run the installed distribution directly:
+
+```bash
+build/install/citydb-terrain-tool/bin/citydb-terrain-tool --help
+build/install/citydb-terrain-tool/bin/citydb-terrain-tool generate --help
+```
+
+The start scripts pull dependencies via the project JAR's `Class-Path` manifest entry, so the `CLASSPATH` variable stays short — important on Windows, where long classpaths can exceed the command-line length limit.
+
+### Output layout
 
 Output is written to the configured output folder in TMS layout:
 
@@ -179,3 +211,59 @@ viewer/terrain/
 ├── ...
 └── {z}/{x}/{y}.terrain
 ```
+
+## Docker
+
+A multi-stage `Dockerfile` is provided. Stage 1 builds the distribution with the Gradle wrapper; stage 2 produces a minimal `eclipse-temurin:21-jre` runtime image.
+
+```bash
+# Build
+docker build -t citydb-terrain-tool .
+
+# Show help
+docker run --rm citydb-terrain-tool --help
+```
+
+### Importing XYZ data into PostGIS
+
+```bash
+docker run --rm \
+  --network host \
+  -v /path/to/xyz:/data/input \
+  citydb-terrain-tool import \
+    -H localhost -d mydb -u postgres --password secret \
+    -t raster_table -i /data/input
+```
+
+### Generating quantized-mesh tiles
+
+```bash
+docker run --rm \
+  --network host \
+  -v /path/to/output:/data/output \
+  citydb-terrain-tool generate \
+    -H localhost -d mydb -u postgres --password secret \
+    -t raster_table -o /data/output -z 12 -m delaunay
+```
+
+### Windows examples
+
+PowerShell:
+```powershell
+docker run --rm `
+  -v "${PWD}\output:/data/output" `
+  citydb-terrain-tool generate `
+    -H host.docker.internal -d mydb -u postgres --password secret `
+    -t raster_table -o /data/output -z 12
+```
+
+CMD:
+```cmd
+docker run --rm ^
+  -v "%cd%\output:/data/output" ^
+  citydb-terrain-tool generate ^
+    -H host.docker.internal -d mydb -u postgres --password secret ^
+    -t raster_table -o /data/output -z 12
+```
+
+> When the database runs on the Docker host, use `--network host` (Linux) or `host.docker.internal` (Windows/Mac) so the container can reach it.

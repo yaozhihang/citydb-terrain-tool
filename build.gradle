@@ -44,6 +44,22 @@ dependencies {
 
 application {
     mainClass = 'org.citydb.terrain.Launcher'
+
+    // Keep generated start scripts short: rely on the JAR's Class-Path manifest
+    // entry to resolve dependencies instead of listing every lib/*.jar on the
+    // command line. This avoids the Windows command-line length limit.
+    startScripts {
+        classpath = jar.outputs.files
+    }
+}
+
+jar {
+    manifest {
+        attributes(
+            'Main-Class': application.mainClass,
+            'Class-Path': configurations.runtimeClasspath.collect { it.name }.join(' ')
+        )
+    }
 }
 
 test {

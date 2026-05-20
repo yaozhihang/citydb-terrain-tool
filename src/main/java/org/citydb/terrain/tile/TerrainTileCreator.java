@@ -73,7 +73,8 @@ public class TerrainTileCreator {
         MeshResult mesh = meshStrategy.generateMesh(gridSize, terrain, maxError, maxTriangleSpan);
 
         // Write output
-        String filePath = outputFolder + zoom + File.separator + tileX + File.separator + tileY + ".terrain";
+        String filePath = java.nio.file.Paths.get(outputFolder,
+                String.valueOf(zoom), String.valueOf(tileX), tileY + ".terrain").toString();
         createFolder(filePath);
 
         TerrainTileWriter.write(filePath,
