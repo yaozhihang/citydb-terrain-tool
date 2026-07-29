@@ -9,7 +9,7 @@ org.citydb.terrain
 └── Launcher                    – CLI entry point, dispatches subcommands
 
 org.citydb.terrain.operation
-├── TerrainImporter             – Imports XYZ data into PostGIS (multi-threaded)
+├── TerrainImporter             – Imports XYZ/GeoTIFF data into PostGIS (multi-threaded)
 └── QMSGenerator                – Orchestrates multi-zoom tile generation
 
 org.citydb.terrain.mesh
@@ -128,10 +128,20 @@ Use 'terrain-tool <command> --help' for command-specific options.
 
 ### `import` options
 
-| Option              | Description                           | Default    |
-|---------------------|---------------------------------------|------------|
-| `-i, --input <dir>` | Input folder containing XYZ ZIP files | *required* |
-| `-h, --help`        | Show help message                     |            |
+| Option              | Description                          | Default    |
+|---------------------|--------------------------------------|------------|
+| `-i, --input <dir>` | Input folder containing terrain data | *required* |
+| `-h, --help`        | Show help message                    |            |
+
+Files in the input folder are picked up by extension: `.zip`, `.xyz`, `.txt`,
+`.tif`, `.tiff` and `.geotiff`. GeoTIFF files are imported as raster directly;
+`.xyz`/`.txt` point files are converted to a raster first, assuming **EPSG:25832**
+(the source CRS is currently hard-coded). Inside a ZIP the same split applies —
+GeoTIFF entries are imported as-is, `.xyz`/`.txt` entries are parsed as points,
+and any other entry is skipped.
+
+> The built-in help for `-i` still reads "Input folder containing XYZ ZIP files",
+> which predates GeoTIFF support.
 
 ### `generate` options
 
@@ -163,7 +173,7 @@ An unrecognised value prints a warning and falls back to `delaunay`.
 ### Examples
 
 ```bash
-# Import XYZ ZIP archives into PostGIS
+# Import terrain data (ZIP / XYZ / GeoTIFF) into PostGIS
 gradle run --args="import -H localhost -d mydb -u postgres --password YOUR_PASSWORD -t raster_table -i /path/to/xyz"
 
 # Generate tiles over the full raster extent (Delaunay mesh, zoom 10)
@@ -242,7 +252,7 @@ docker build -t citydb-terrain-tool .
 docker run --rm citydb-terrain-tool --help
 ```
 
-### Importing XYZ data into PostGIS
+### Importing terrain data into PostGIS
 
 ```bash
 docker run --rm \
