@@ -1,12 +1,16 @@
 # CityDB Terrain Tool
 
-Generates [Cesium quantized-mesh](https://github.com/CesiumGS/quantized-mesh) terrain tiles from PostGIS elevation data (raster or point cloud). Designed for serving 3D terrain in CesiumJS-based viewers.
+Generates [Cesium quantized-mesh](https://github.com/CesiumGS/quantized-mesh) terrain tiles from PostGIS raster elevation data. Designed for serving 3D terrain in CesiumJS-based viewers.
 
 ## Architecture
 
 ```
 org.citydb.terrain
-└── Launcher                    – CLI entry point, parses arguments
+└── Launcher                    – CLI entry point, dispatches subcommands
+
+org.citydb.terrain.operation
+├── TerrainImporter             – Imports XYZ data into PostGIS (multi-threaded)
+└── QMSGenerator                – Orchestrates multi-zoom tile generation
 
 org.citydb.terrain.mesh
 ├── MeshStrategy                – Interface for mesh generation algorithms
@@ -16,24 +20,18 @@ org.citydb.terrain.mesh
 └── SimpleGridMesh              – Regular-grid mesh (no simplification)
 
 org.citydb.terrain.tile
-├── TerrainGenerator            – Orchestrates multi-zoom tile generation
 ├── TerrainTileCreator          – Per-tile pipeline (elevation → mesh → binary)
 └── TerrainTileWriter           – Encodes mesh into Cesium .terrain format
 
 org.citydb.terrain.provider
 ├── ElevationProvider           – Interface for elevation data sources
 ├── PostGISElevationProvider    – Fetches elevation from PostGIS raster data
-├── PointCloudElevationProvider – Fetches elevation from PostGIS point clouds
 └── ElevationGridUtils          – Shared grid utilities (edge cache, smoothing)
 
 org.citydb.terrain.util
 ├── CoordinateUtils             – WGS84/ECEF/TMS coordinate conversions
 ├── BoundingSphere              – Bounding sphere computation
 └── Cartesian3                  – 3D vector math, horizon culling
-
-org.citydb.terrain.tool
-├── RasterImporter              – Imports GeoTIFF files into PostGIS
-└── XYZToGeoTIFF                – Converts XYZ point files to GeoTIFF
 ```
 
 ## Mesh Strategies
@@ -65,15 +63,11 @@ Uniform regular-grid triangulation. Every grid cell is split into two triangles 
 - `maxError` and `maxTriangleSpan` parameters are ignored
 - Useful when consistent mesh density is preferred over adaptive simplification
 
-## Elevation Providers
+## Elevation Provider
 
-### PostGISElevationProvider (raster)
+Elevation is read through the `ElevationProvider` interface. The only implementation is `PostGISElevationProvider`, which fetches raster elevation data from PostGIS using `ST_Resample` and `ST_Union`. SRID is auto-detected from the database, and the tile extent defaults to the raster's own extent.
 
-Fetches raster elevation data from PostGIS using `ST_Resample` and `ST_Union`. SRID is auto-detected from the database.
-
-### PointCloudElevationProvider (pointcloud)
-
-Queries 3D point geometries (`PointZ`) from PostGIS. Points are snapped to a grid and averaged using `ST_SnapToGrid` in SQL.
+There is no runtime provider selection — the raster provider is used unconditionally. Adding another source means implementing `ElevationProvider` and wiring it up in `Launcher`.
 
 ## Zoom Level & Grid Size Selection
 
@@ -94,7 +88,7 @@ where `grid_cells = gridSize - 1`.
 | 10   | 129      | 128        | ~153          | ~500            | Very coarse overview     |
 | 12   | 129      | 128        | ~38           | ~8k             | Overview                 |
 | 13   | 129      | 128        | ~19           | ~33k            | Moderate                 |
-| 13   | **513**  | 512        | **~4.8**      | ~33k            | **Matches 5m raster**   |
+| 13   | **513**  | 512        | **~4.8**      | ~33k            | **Matches 5m raster**    |
 | 14   | 129      | 128        | ~9.5          | ~130k           | Slightly coarser than 5m |
 | 15   | 129      | 128        | ~4.8          | ~530k           | Matches 5m raster        |
 
@@ -106,63 +100,85 @@ where `grid_cells = gridSize - 1`.
 
 ## CLI Parameters
 
-All parameters have sensible defaults and can be overridden via command-line options:
+The tool is split into two subcommands:
 
 ```
-Usage: terrain-tile [options]
+Usage: terrain-tool <command> [options]
 
-Options:
-  --minX <lon>       West extent longitude             (default: 8.97205)
-  --maxX <lon>       East extent longitude             (default: 13.84636)
-  --minY <lat>       South extent latitude             (default: 47.26887)
-  --maxY <lat>       North extent latitude             (default: 50.56651)
-  --gridSize <n>     Grid size, must be 2^n+1 for RTIN (default: 33)
-  -z, --zoom <n>     Max zoom level                    (default: 10)
-  -e, --error <m>    Base error in meters              (default: 5.0)
-  -o, --output <dir> Output folder                     (default: viewer/terrain/)
-  -m, --mesh <type>  Mesh strategy                     (default: delaunay)
-  -p, --provider     Elevation provider                (default: raster)
-  -d, --db <url>     JDBC database URL                 (default: jdbc:postgresql://localhost:5432/bayern_dem_raster)
-  -u, --user <name>  Database username                 (default: postgres)
-  --password <pw>    Database password                 (required)
-  -t, --table <name> Database table name               (default: raster_table / point_cloud)
-  -h, --help         Show help message
+Commands:
+  import    Import XYZ terrain data (ZIP files) into database
+  generate  Generate quantized mesh terrain tiles from database
+
+Use 'terrain-tool <command> --help' for command-specific options.
 ```
+
+### Database options (both commands)
+
+| Option                | Description          | Default    |
+|-----------------------|----------------------|------------|
+| `-H, --host <host>`   | Database host        | *required* |
+| `-P, --port <n>`      | Database port        | `5432`     |
+| `-d, --db <name>`     | Database name        | *required* |
+| `-u, --user <name>`   | Database username    | *required* |
+| `--password <pw>`     | Database password    | *required* |
+| `-s, --schema <name>` | Database schema      | `public`   |
+| `-t, --table <name>`  | Database table name  | *required* |
+
+`-d` takes a plain database *name*, not a JDBC URL — the connection string is assembled internally as `jdbc:postgresql://<host>:<port>/<db>`. The table is addressed schema-qualified as `<schema>.<table>`.
+
+### `import` options
+
+| Option              | Description                           | Default    |
+|---------------------|---------------------------------------|------------|
+| `-i, --input <dir>` | Input folder containing XYZ ZIP files | *required* |
+| `-h, --help`        | Show help message                     |            |
+
+### `generate` options
+
+| Option               | Description                       | Default            |
+|----------------------|-----------------------------------|--------------------|
+| `--minX <lon>`       | West extent longitude             | from raster extent |
+| `--maxX <lon>`       | East extent longitude             | from raster extent |
+| `--minY <lat>`       | South extent latitude             | from raster extent |
+| `--maxY <lat>`       | North extent latitude             | from raster extent |
+| `--gridSize <n>`     | Grid size, must be 2^n+1 for RTIN | `33`               |
+| `-z, --zoom <n>`     | Max zoom level                    | `10`               |
+| `-e, --error <m>`    | Base error in meters              | `5.0`              |
+| `-o, --output <dir>` | Output folder                     | `viewer/terrain/`  |
+| `-m, --mesh <type>`  | Mesh strategy                     | `delaunay`         |
+| `-h, --help`         | Show help message                 |                    |
+
+When an extent option is omitted, the bounding box is queried from the raster table itself, so `generate` covers the full dataset by default.
 
 Available mesh strategies for `--mesh`:
 
-| Value      | Strategy        | Description                                     |
-|------------|----------------|-------------------------------------------------|
-| `delaunay` | DelaunayMesh   | Adaptive Delaunay triangulation (default)        |
-| `rtin`     | RtinMesh       | Adaptive RTIN, requires gridSize = 2^n+1         |
-| `simple`   | SimpleGridMesh | Uniform grid, no adaptive simplification         |
+| Value      | Strategy       | Description                               |
+|------------|----------------|-------------------------------------------|
+| `delaunay` | DelaunayMesh   | Adaptive Delaunay triangulation (default) |
+| `rtin`     | RtinMesh       | Adaptive RTIN, requires gridSize = 2^n+1  |
+| `simple`   | SimpleGridMesh | Uniform grid, no adaptive simplification  |
 
-Available elevation providers for `--provider`:
-
-| Value        | Provider                    | Description                          |
-|--------------|-----------------------------|--------------------------------------|
-| `raster`     | PostGISElevationProvider    | PostGIS raster data (default)         |
-| `pointcloud` | PointCloudElevationProvider | PostGIS 3D point geometries (PointZ)  |
+An unrecognised value prints a warning and falls back to `delaunay`.
 
 ### Examples
 
 ```bash
-# Run with defaults (Bavaria extent, Delaunay mesh, zoom 10)
-gradle run
+# Import XYZ ZIP archives into PostGIS
+gradle run --args="import -H localhost -d mydb -u postgres --password YOUR_PASSWORD -t raster_table -i /path/to/xyz"
 
-# Custom extent with RTIN strategy
-gradle run --args="--minX 10.7078 --maxX 10.8926 --minY 47.5541 --maxY 47.6156 --mesh rtin --zoom 12"
+# Generate tiles over the full raster extent (Delaunay mesh, zoom 10)
+gradle run --args="generate -H localhost -d mydb -u postgres --password YOUR_PASSWORD -t raster_table"
 
-# Point cloud provider with custom DB connection
-gradle run --args="--provider pointcloud -d jdbc:postgresql://myhost:5432/mydb -u admin --password YOUR_PASSWORD -t lidar_points"
+# Custom extent with the RTIN strategy
+gradle run --args="generate -H localhost -d mydb -u postgres --password YOUR_PASSWORD -t raster_table --minX 10.7078 --maxX 10.8926 --minY 47.5541 --maxY 47.6156 --mesh rtin --gridSize 129 --zoom 12"
 
 # Simple grid mesh with higher zoom and tighter error
-gradle run --args="--mesh simple --zoom 14 --error 2.0 --output output/terrain/"
+gradle run --args="generate -H localhost -d mydb -u postgres --password YOUR_PASSWORD -t raster_table --mesh simple --zoom 14 --error 2.0 --output output/terrain/"
 ```
 
 ## Building & Running
 
-Requires Java 21+ and a PostGIS database with elevation data (raster or point cloud).
+Requires Java 21+ and a PostGIS database holding raster elevation data.
 
 ### Development (Gradle)
 
@@ -196,6 +212,8 @@ Run the installed distribution directly:
 build/install/citydb-terrain-tool/bin/citydb-terrain-tool --help
 build/install/citydb-terrain-tool/bin/citydb-terrain-tool generate --help
 ```
+
+> Subcommand help still prints the full option list, but because the required database options are validated before `--help` is handled, it is preceded by a `Missing required options` message and exits with a non-zero status.
 
 The start scripts pull dependencies via the project JAR's `Class-Path` manifest entry, so the `CLASSPATH` variable stays short — important on Windows, where long classpaths can exceed the command-line length limit.
 
