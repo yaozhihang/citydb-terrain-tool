@@ -124,7 +124,7 @@ Options:
   -p, --provider     Elevation provider                (default: raster)
   -d, --db <url>     JDBC database URL                 (default: jdbc:postgresql://localhost:5432/bayern_dem_raster)
   -u, --user <name>  Database username                 (default: postgres)
-  --password <pw>    Database password                 (default: 125125)
+  --password <pw>    Database password                 (required)
   -t, --table <name> Database table name               (default: raster_table / point_cloud)
   -h, --help         Show help message
 ```
@@ -154,7 +154,7 @@ gradle run
 gradle run --args="--minX 10.7078 --maxX 10.8926 --minY 47.5541 --maxY 47.6156 --mesh rtin --zoom 12"
 
 # Point cloud provider with custom DB connection
-gradle run --args="--provider pointcloud -d jdbc:postgresql://myhost:5432/mydb -u admin --password secret -t lidar_points"
+gradle run --args="--provider pointcloud -d jdbc:postgresql://myhost:5432/mydb -u admin --password YOUR_PASSWORD -t lidar_points"
 
 # Simple grid mesh with higher zoom and tighter error
 gradle run --args="--mesh simple --zoom 14 --error 2.0 --output output/terrain/"
@@ -231,7 +231,7 @@ docker run --rm \
   --network host \
   -v /path/to/xyz:/data/input \
   citydb-terrain-tool import \
-    -H localhost -d mydb -u postgres --password secret \
+    -H localhost -d mydb -u postgres --password YOUR_PASSWORD \
     -t raster_table -i /data/input
 ```
 
@@ -242,7 +242,7 @@ docker run --rm \
   --network host \
   -v /path/to/output:/data/output \
   citydb-terrain-tool generate \
-    -H localhost -d mydb -u postgres --password secret \
+    -H localhost -d mydb -u postgres --password YOUR_PASSWORD \
     -t raster_table -o /data/output -z 12 -m delaunay
 ```
 
@@ -253,7 +253,7 @@ PowerShell:
 docker run --rm `
   -v "${PWD}\output:/data/output" `
   citydb-terrain-tool generate `
-    -H host.docker.internal -d mydb -u postgres --password secret `
+    -H host.docker.internal -d mydb -u postgres --password YOUR_PASSWORD `
     -t raster_table -o /data/output -z 12
 ```
 
@@ -262,8 +262,14 @@ CMD:
 docker run --rm ^
   -v "%cd%\output:/data/output" ^
   citydb-terrain-tool generate ^
-    -H host.docker.internal -d mydb -u postgres --password secret ^
+    -H host.docker.internal -d mydb -u postgres --password YOUR_PASSWORD ^
     -t raster_table -o /data/output -z 12
 ```
 
 > When the database runs on the Docker host, use `--network host` (Linux) or `host.docker.internal` (Windows/Mac) so the container can reach it.
+
+> **Note on credentials:** passing `--password` on the command line exposes it to your shell history and to other users via the process list. Prefer a PostgreSQL [password file](https://www.postgresql.org/docs/current/libpq-pgpass.html) (`~/.pgpass`), or read the value from a variable that you keep outside version control.
+
+## License
+
+This project is licensed under the Apache License 2.0 — see [LICENSE](LICENSE) for details.
